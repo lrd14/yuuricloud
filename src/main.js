@@ -35,7 +35,7 @@ const state = {
   scanning: false, rescanQueued: false,
   source: "local", // "local" library or "sc" (SoundCloud)
   // Soulseek through slskd: connection status, recent searches and slskd's download list
-  slsk: { status: null, searches: [], current: null, filter: "", transfers: [], connecting: false, error: "", collapsed: new Set() },
+  slsk: { status: null, searches: [], current: null, filter: "", transfers: [], connecting: false, error: "", collapsed: new Set(), extraFiles: [] },
   sc: {
     playlists: [],
     liked: new Set(),  // urns of liked tracks, known once Likes has loaded
@@ -2439,20 +2439,106 @@ function slskRemoveSearch(id) {
 /** Queue result rows for download, grouped by the user who has them. */
 async function slskDownload(tracks) {
   const byUser = new Map();
+  let switched = null;
   for (const t of tracks) {
-    if (!byUser.has(t.slsk.username)) byUser.set(t.slsk.username, []);
-    byUser.get(t.slsk.username).push({ filename: t.slsk.filename, size: t.slsk.size });
+    let f = t.slsk;
+    // a single song from a busy user: take an identical copy from someone with a free slot instead
+    if (tracks.length === 1 && !f.freeSlot) {
+      const alt = slskBestCopy(f.filename, f.size, new Set([f.username]));
+      if (alt?.freeSlot) [f, switched] = [alt, alt.username];
+    }
+    if (!byUser.has(f.username)) byUser.set(f.username, []);
+    byUser.get(f.username).push({ filename: f.filename, size: f.size });
   }
   try {
     for (const [username, files] of byUser) await invoke("slsk_download", { username, files });
-    setStatus(tracks.length === 1 ? `Downloading “${tracks[0].title}” — see Downloads` : `Downloading ${tracks.length} files — see Downloads`, 4000);
+    setStatus(switched ? `Downloading “${tracks[0].title}” from ${switched}, who has a free slot — see Downloads`
+      : tracks.length === 1 ? `Downloading “${tracks[0].title}” — see Downloads` : `Downloading ${tracks.length} files — see Downloads`, 5000);
   } catch (e) {
     setStatus(String(e), 6000);
   }
   pollSlskTransfers();
 }
 
-/** Every result in the same folder from the same user: usually the whole album. */
+// ------------------------------------------- picking and switching sources
+// Soulseek users send to a few people at a time, and some never get to you. A file is the same
+// file when its name and size match, so any user with an identical copy can stand in.
+
+const slskFileKey = (filename, size) => `${baseName(filename).toLowerCase()}\0${size}`;
+const slskSourceScore = (f) => (f.freeSlot ? 1e12 : 0) + f.uploadSpeed - f.queueLength * 1e5;
+
+/** Identical copies in the searches done so far (and the ones run to find other sources). */
+function slskCopies(filename, size) {
+  const key = slskFileKey(filename, size), out = [];
+  for (const files of [...state.slsk.searches.map((x) => x.files), state.slsk.extraFiles]) {
+    for (const f of files) if (slskFileKey(f.filename, f.size) === key) out.push(f);
+  }
+  return out;
+}
+
+/** The best copy not from one of the users in `skip`. */
+function slskBestCopy(filename, size, skip) {
+  return slskCopies(filename, size).filter((f) => !skip.has(f.username)).sort((a, b) => slskSourceScore(b) - slskSourceScore(a))[0];
+}
+
+/** Words to search for a file by: its name without track number, extension and punctuation. */
+const slskSearchWords = (filename) => baseName(filename).replace(/\.[^.]+$/, "").replace(/^[\d\s._-]+/, "").replace(/[_()[\].-]+/g, " ").replace(/\s+/g, " ").trim();
+
+const SLSK_SWITCH_AFTER = 2 * 60 * 1000;
+const slskWaitingSince = new Map(); // transfer id -> when we first saw it waiting in a queue
+const slskTried = new Map(); // file key -> users already tried
+const slskLookedUp = new Set(); // file keys we've searched for other sources
+let slskSwitching = false;
+
+/** Move downloads that have waited in someone's queue too long to another user with the same file. */
+async function slskSwitchStuck() {
+  if (slskSwitching) return;
+  slskSwitching = true;
+  const now = Date.now();
+  for (const x of state.slsk.transfers) {
+    if (!x.state.includes("Remotely")) {
+      slskWaitingSince.delete(x.id);
+      continue;
+    }
+    if (!slskWaitingSince.has(x.id)) slskWaitingSince.set(x.id, now);
+    if (now - slskWaitingSince.get(x.id) < SLSK_SWITCH_AFTER) continue;
+    const key = slskFileKey(x.filename, x.size);
+    const tried = slskTried.get(key) || new Set();
+    tried.add(x.username);
+    slskTried.set(key, tried);
+    const alt = slskBestCopy(x.filename, x.size, tried);
+    if (!alt) {
+      // nobody else in our searches has it: look once, and try again on a later round
+      if (!slskLookedUp.has(key)) {
+        slskLookedUp.add(key);
+        slskFindSources(x.filename);
+      }
+      continue;
+    }
+    tried.add(alt.username);
+    slskWaitingSince.delete(x.id);
+    try {
+      await invoke("slsk_download", { username: alt.username, files: [{ filename: alt.filename, size: alt.size }] });
+      await invoke("slsk_cancel", { username: x.username, id: x.id, remove: true });
+      setStatus(`“${baseName(x.filename)}” was stuck in ${x.username}'s queue — getting it from ${alt.username} instead`, 6000);
+    } catch {}
+  }
+  slskSwitching = false;
+}
+
+/** A quiet search for other copies of a file; its results only feed slskCopies. */
+async function slskFindSources(filename) {
+  const words = slskSearchWords(filename);
+  if (words.length < 3) return;
+  try {
+    const id = await invoke("slsk_search", { text: words });
+    await new Promise((r) => setTimeout(r, 17000));
+    const r = await invoke("slsk_search_results", { id });
+    state.slsk.extraFiles.push(...r.files);
+    if (state.slsk.extraFiles.length > 5000) state.slsk.extraFiles.splice(0, state.slsk.extraFiles.length - 5000);
+  } catch {}
+}
+
 /** The folder header a file row sits under. */
 const slskGroupOf = (t) => state.shown.find((x) => x.group && x.key === t.groupKey);
 
@@ -2508,6 +2594,7 @@ async function pollSlskTransfers() {
   }
   slskSeenDone = done;
   renderDownloads();
+  slskSwitchStuck();
   const busy = slskActive() > 0 || !$("downloads").hidden;
   slskTransferTimer = setTimeout(pollSlskTransfers, busy ? 1500 : 15000);
 }
@@ -2527,7 +2614,7 @@ function slskTransferText(x) {
     return `${pct}% · ${fmtBytes(x.bytes)} of ${fmtBytes(x.size)}${x.speed ? ` · ${fmtBytes(x.speed)}/s` : ""}`;
   }
   if (st.includes("Remotely")) {
-    const place = slskPlaces.get(x.id) ?? x.placeInQueue;
+    const place = slskPlaces.get(x.username) ?? x.placeInQueue;
     return place ? `In their queue — ${ordinal(place)} in line` : "In their queue — waiting for them to start sending";
   }
   if (st.includes("Queued")) return "Waiting";
@@ -2536,21 +2623,26 @@ function slskTransferText(x) {
 
 const ordinal = (n) => n + ([, "st", "nd", "rd"][(n % 100 >> 3) ^ 1 && n % 10] || "th");
 
-// where we are in each uploader's queue: id -> place, asked at most every 30 s per file
+// Where we are in each uploader's queue: asked for one file per user (the place is about the
+// same for all of a user's files), one question at a time, at most once a minute per user.
+// The other user may never answer, and each question waits a few seconds for them.
 const slskPlaces = new Map(), slskPlaceAsked = new Map();
-function askSlskPlaces() {
-  const now = Date.now();
+let slskAsking = false;
+async function askSlskPlaces() {
+  if (slskAsking) return;
+  slskAsking = true;
+  const now = Date.now(), users = new Set();
   for (const x of state.slsk.transfers) {
-    if (!x.state.includes("Remotely") || now - (slskPlaceAsked.get(x.id) || 0) < 30000) continue;
-    slskPlaceAsked.set(x.id, now);
-    invoke("slsk_queue_position", { username: x.username, id: x.id })
-      .then((place) => {
-        if (place == null) return;
-        slskPlaces.set(x.id, place);
-        if (!$("downloads").hidden) renderSlskTransfers();
-      })
-      .catch(() => {});
+    if (!x.state.includes("Remotely") || users.has(x.username) || now - (slskPlaceAsked.get(x.username) || 0) < 60000) continue;
+    users.add(x.username);
+    slskPlaceAsked.set(x.username, now);
+    const place = await invoke("slsk_queue_position", { username: x.username, id: x.id }).catch(() => null);
+    if (place != null) {
+      slskPlaces.set(x.username, place);
+      if (!$("downloads").hidden) renderSlskTransfers();
+    }
   }
+  slskAsking = false;
 }
 
 function renderSlskTransfers() {

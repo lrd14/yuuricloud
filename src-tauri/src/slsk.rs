@@ -58,11 +58,12 @@ impl Default for SlskConfig {
     }
 }
 
-/// A running (or reachable) slskd.
+/// A running (or reachable) slskd. Shared between requests, so a slow one (asking another user
+/// something can take seconds) doesn't hold up the rest.
 pub struct Conn {
     base: String,
     key: String,
-    child: Option<Child>,
+    child: std::sync::Mutex<Option<Child>>,
     pid_file: Option<PathBuf>,
     /// Where finished downloads land, when known.
     pub downloads_dir: Option<PathBuf>,
@@ -72,7 +73,7 @@ pub struct Conn {
 
 impl Drop for Conn {
     fn drop(&mut self) {
-        if let Some(child) = &mut self.child {
+        if let Some(child) = self.child.get_mut().unwrap().as_mut() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -223,17 +224,18 @@ flags:
     stop_with_us(&child);
     let _ = std::fs::write(&pid_file, child.id().to_string());
 
-    let mut conn = Conn {
+    let conn = Conn {
         base: format!("http://127.0.0.1:{port}"),
         key,
-        child: Some(child),
+        child: std::sync::Mutex::new(Some(child)),
         pid_file: Some(pid_file),
         downloads_dir: Some(launch.downloads.to_path_buf()),
         listen_port: Some(listen),
     };
     let started = Instant::now();
     loop {
-        if let Some(status) = conn.child.as_mut().unwrap().try_wait().map_err(|e| e.to_string())? {
+        let exited = conn.child.lock().unwrap().as_mut().unwrap().try_wait().map_err(|e| e.to_string())?;
+        if let Some(status) = exited {
             let tail = log_tail(&log_file);
             return Err(format!("slskd stopped ({status}){}", if tail.is_empty() { String::new() } else { format!(": {tail}") }));
         }
@@ -311,7 +313,7 @@ pub fn connect_external(cfg: &SlskConfig) -> Result<Conn, String> {
     if !base.starts_with("http://") && !base.starts_with("https://") {
         return Err("The slskd address should start with http:// or https://".into());
     }
-    let mut conn = Conn { base, key: cfg.api_key.trim().to_string(), child: None, pid_file: None, downloads_dir: None, listen_port: None };
+    let mut conn = Conn { base, key: cfg.api_key.trim().to_string(), child: std::sync::Mutex::new(None), pid_file: None, downloads_dir: None, listen_port: None };
     conn.get("/api/v0/application")?;
     // ask slskd where it saves downloads, so finished files can be shown in their folder
     conn.downloads_dir = conn
@@ -354,12 +356,12 @@ impl Conn {
     }
 
     pub fn managed(&self) -> bool {
-        self.child.is_some()
+        self.child.lock().unwrap().is_some()
     }
 
     /// Whether slskd is still running (managed mode).
-    pub fn alive(&mut self) -> bool {
-        match &mut self.child {
+    pub fn alive(&self) -> bool {
+        match self.child.lock().unwrap().as_mut() {
             Some(c) => matches!(c.try_wait(), Ok(None)),
             None => true,
         }
@@ -602,7 +604,7 @@ mod tests {
         assert!(conn.transfers().unwrap().is_empty());
         assert!(conn.search("test").unwrap_err().contains("logged in"));
         // without the key, slskd turns requests away
-        let open = Conn { base: conn.base.clone(), key: "wrong".into(), child: None, pid_file: None, downloads_dir: None, listen_port: None };
+        let open = Conn { base: conn.base.clone(), key: "wrong".into(), child: std::sync::Mutex::new(None), pid_file: None, downloads_dir: None, listen_port: None };
         assert!(open.status().unwrap_err().contains("API key"));
         drop(open);
         drop(conn);

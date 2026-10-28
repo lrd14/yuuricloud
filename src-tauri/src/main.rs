@@ -42,7 +42,7 @@ struct AppState {
     /// set to stop a "Download for me" in progress
     tool_cancel: AtomicBool,
     /// the slskd yuuricloud is using for Soulseek, once connected
-    slsk: Mutex<Option<slsk::Conn>>,
+    slsk: Mutex<Option<std::sync::Arc<slsk::Conn>>>,
     /// held while slskd starts, so two clicks don't start two copies
     slsk_starting: Mutex<()>,
 }
@@ -649,13 +649,17 @@ async fn with_slsk<T: Send + 'static>(
 ) -> Result<T, String> {
     blocking(move || {
         let state = app.state::<AppState>();
-        let mut guard = state.slsk.lock().unwrap();
-        let Some(conn) = guard.as_mut() else { return Err("Soulseek isn't connected".into()) };
-        if !conn.alive() {
-            guard.take();
-            return Err("slskd stopped unexpectedly — connect again".into());
-        }
-        f(conn)
+        // hold the lock only to pick up the connection, not for the request itself
+        let conn = {
+            let mut guard = state.slsk.lock().unwrap();
+            let Some(conn) = guard.clone() else { return Err("Soulseek isn't connected".into()) };
+            if !conn.alive() {
+                guard.take();
+                return Err("slskd stopped unexpectedly — connect again".into());
+            }
+            conn
+        };
+        f(&conn)
     })
     .await
 }
@@ -701,7 +705,7 @@ async fn slsk_connect(app: AppHandle) -> Result<serde_json::Value, String> {
             )?
         };
         let status = conn.status().unwrap_or_default();
-        *state.slsk.lock().unwrap() = Some(conn);
+        *state.slsk.lock().unwrap() = Some(std::sync::Arc::new(conn));
         Ok(status)
     })
     .await
