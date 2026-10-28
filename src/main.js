@@ -1322,7 +1322,7 @@ function applyPrefs() {
   root.setProperty("--tint-alpha", prefs.tint);
   root.setProperty("--cover-min", COVER_SIZES[prefs.coverSize] || COVER_SIZES.medium);
   root.setProperty("--speed", prefs.speed);
-  document.body.style.zoom = prefs.scale;
+  applyInterfaceSize();
   body.toggle("no-anim", !prefs.animations);
   body.toggle("compact", prefs.compact);
   body.toggle("hide-counts", !prefs.showCounts);
@@ -1725,8 +1725,19 @@ load();
 // ------------------------------------------------------- right-click menu
 
 const ctx = $("ctx");
-// outside <body>, so the interface-size zoom doesn't throw off its position
 document.documentElement.appendChild(ctx);
+
+/**
+ * Interface size: zoom the whole webview, like Ctrl + / Ctrl − in a browser. (CSS zoom on the
+ * page left the layout sized for 100%, so bigger sizes pushed the player bar off the window.)
+ */
+let appliedScale = 1;
+function applyInterfaceSize() {
+  const scale = Number(prefs.scale) || 1;
+  if (scale === appliedScale) return;
+  appliedScale = scale;
+  window.__TAURI__.webview.getCurrentWebview().setZoom(scale).catch((e) => console.warn("Couldn't set the interface size", e));
+}
 
 /** Show a menu at (x, y). `items` are { label, icon, on, disabled, action } or "-" for a divider. */
 function openMenu(x, y, title, items) {
