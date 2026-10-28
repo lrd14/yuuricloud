@@ -479,6 +479,56 @@ fn download_folder(app: &AppHandle, cfg: &downloads::DownloadConfig) -> PathBuf 
     music.join("SoundCloud")
 }
 
+/// Folders that are always part of the library: where SoundCloud and Soulseek downloads go,
+/// once they exist. Returned as (path, label).
+fn auto_folders(app: &AppHandle, s: &Settings) -> Vec<(PathBuf, &'static str)> {
+    [(download_folder(app, &s.downloads), "SoundCloud downloads"), (slsk_download_folder(app, &s.soulseek), "Soulseek downloads")]
+        .into_iter()
+        .filter(|(p, _)| p.is_dir())
+        .collect()
+}
+
+/// Every folder a scan looks in: the user's folders plus the download folders, leaving out any
+/// download folder that is already inside one of the user's folders.
+fn library_roots(app: &AppHandle, s: &Settings) -> Vec<String> {
+    let mut roots = s.folders.clone();
+    for (p, _) in auto_folders(app, s) {
+        if !s.folders.iter().any(|f| p.starts_with(f)) {
+            roots.push(p.to_string_lossy().into_owned());
+        }
+    }
+    roots
+}
+
+#[derive(Serialize)]
+struct AutoFolder {
+    path: String,
+    label: &'static str,
+}
+
+#[derive(Serialize)]
+struct AutoFolders {
+    /// The user's own folders, after dropping any that are now automatic.
+    folders: Vec<String>,
+    auto: Vec<AutoFolder>,
+}
+
+#[tauri::command]
+fn library_auto_folders(app: AppHandle, state: State<AppState>) -> AutoFolders {
+    let mut s = state.settings.lock().unwrap();
+    let auto = auto_folders(&app, &s);
+    // download folders added by hand before they were automatic: they're included anyway now
+    let before = s.folders.len();
+    s.folders.retain(|f| !auto.iter().any(|(p, _)| Path::new(f) == p.as_path()));
+    if s.folders.len() != before {
+        state.save_settings(&s);
+    }
+    AutoFolders {
+        folders: s.folders.clone(),
+        auto: auto.into_iter().map(|(p, label)| AutoFolder { path: p.to_string_lossy().into_owned(), label }).collect(),
+    }
+}
+
 #[tauri::command]
 fn dl_folder(app: AppHandle, state: State<AppState>) -> String {
     let cfg = state.settings.lock().unwrap().downloads.clone();
@@ -503,21 +553,6 @@ fn dl_open_folder(app: AppHandle, state: State<AppState>) -> Result<(), String> 
     let folder = download_folder(&app, &cfg);
     std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     app.opener().open_path(folder.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
-}
-
-/// Add the download folder to the library so saved songs show up there.
-#[tauri::command]
-fn dl_add_to_library(app: AppHandle, state: State<AppState>) -> Result<Settings, String> {
-    let mut s = state.settings.lock().unwrap();
-    let folder = download_folder(&app, &s.downloads);
-    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-    allow_dir(&app, &folder);
-    let folder = folder.to_string_lossy().into_owned();
-    if !s.folders.contains(&folder) {
-        s.folders.push(folder);
-        state.save_settings(&s);
-    }
-    Ok(s.clone())
 }
 
 #[tauri::command]
@@ -797,21 +832,6 @@ fn slsk_open_folder(app: AppHandle, state: State<AppState>) -> Result<(), String
     app.opener().open_path(folder.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
 }
 
-/// Add the Soulseek download folder to the library so downloads show up there.
-#[tauri::command]
-fn slsk_add_to_library(app: AppHandle, state: State<AppState>) -> Result<Settings, String> {
-    let mut s = state.settings.lock().unwrap();
-    let folder = slsk_download_folder(&app, &s.soulseek);
-    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-    allow_dir(&app, &folder);
-    let folder = folder.to_string_lossy().into_owned();
-    if !s.folders.contains(&folder) {
-        s.folders.push(folder);
-        state.save_settings(&s);
-    }
-    Ok(s.clone())
-}
-
 /// Show a finished Soulseek download in the file manager (only files in the download folder).
 #[tauri::command]
 fn slsk_reveal(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
@@ -843,8 +863,11 @@ async fn scan(app: AppHandle, state: State<'_, AppState>, full: bool) -> Result<
     }
     let (folders, prefer_tags, mode_changed) = {
         let s = state.settings.lock().unwrap();
-        (s.folders.clone(), s.prefer_tags, s.scanned_with_tags != Some(s.prefer_tags))
+        (library_roots(&app, &s), s.prefer_tags, s.scanned_with_tags != Some(s.prefer_tags))
     };
+    for folder in &folders {
+        allow_dir(&app, Path::new(folder));
+    }
     let cache: HashMap<String, Track> = if full || mode_changed {
         HashMap::new()
     } else {
@@ -936,7 +959,6 @@ fn main() {
             dl_pick_folder,
             dl_set_ytdlp,
             dl_open_folder,
-            dl_add_to_library,
             dl_ytdlp_version,
             sc_set_keys,
             sc_connect,
@@ -949,6 +971,7 @@ fn main() {
             sc_search,
             sc_prepare,
             sc_waveform,
+            library_auto_folders,
             tool_install,
             tool_cancel,
             slsk_set_config,
@@ -966,7 +989,6 @@ fn main() {
             slsk_folder,
             slsk_pick_folder,
             slsk_open_folder,
-            slsk_add_to_library,
             slsk_reveal,
             slsk_pick_exe,
             scan

@@ -85,8 +85,8 @@ To go back to the shared app, clear both keys and save.
 
 **Downloading.** Right-click a SoundCloud song and choose **Download**. To save a whole list, right-click Likes, a
 playlist or search results in the left panel and choose **Download all**. Files are named "Artist - Title" and get
-title, artist and cover tags. They go to `Music/SoundCloud` unless you change the folder in Settings → Integrations,
-where **Add to library** makes them show up in your library.
+title, artist and cover tags. They go to `Music/SoundCloud` (change it in Settings → Integrations) and show up in
+your library on their own.
 
 - **Songs the artist allows downloads for** are saved straight from SoundCloud, often as the original upload (WAV,
   FLAC and so on).
@@ -116,7 +116,7 @@ It works through [slskd](https://github.com/slskd/slskd), a free Soulseek progra
 Then type in the search box and press **Enter**. Results show who has each file, the folder it's in and its
 quality; users with a free upload slot and fast connections come first. **Double-click** a result (or press
 **Enter**) to download it, or right-click for **Download whole folder**. Downloads show on the Downloads page and
-land in `Music/Soulseek`; **Add to library** makes them show up in your library as they finish.
+land in `Music/Soulseek`, and show up in your library on their own as they finish.
 
 - Your Soulseek download folder is always shared, and **Share my music library** shares your library folders too.
   Many Soulseek users won't send files to people who share nothing.

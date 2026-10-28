@@ -48,7 +48,7 @@
 
     <section id="empty" class="empty" hidden>
       <svg viewBox="0 0 24 24"><use href="#i-note" /></svg>
-      <p>Your library is empty.<br />Add a folder with your music to get started.</p>
+      <p>Your library is empty.<br />Add a folder with your music to get started. Songs you download from<br />SoundCloud or Soulseek show up here on their own.</p>
       <button id="empty-add" class="btn accent">Add music folder</button>
     </section>
 
@@ -102,6 +102,14 @@
       <aside class="panel artists">
         <h2 id="artists-title">Artists</h2>
         <ul id="artist-list" class="list" tabindex="0"></ul>
+        <div id="local-hint" class="local-hint" hidden>
+          <button id="local-hint-close" class="icon-btn" title="Don't show this again">
+            <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+          </button>
+          <div class="label">Add your own music</div>
+          <div class="hint">Your SoundCloud and Soulseek downloads show up here on their own. Add a folder to see the rest of your music too.</div>
+          <button id="local-hint-add" class="btn accent small">Add folder…</button>
+        </div>
       </aside>
       <section class="right">
         <section class="panel albums">
@@ -289,6 +297,7 @@
 
           <div class="tab" data-tab="library" hidden>
             <div class="label">Music folders</div>
+            <div class="hint">Your SoundCloud and Soulseek download folders are always included.</div>
             <ul id="folder-list" class="folder-list"></ul>
             <button id="settings-add-folder" class="btn">Add folder…</button>
             <div class="row">
@@ -375,7 +384,6 @@
                 <div class="row">
                   <div><div class="label">Download folder</div><div id="dl-folder" class="hint path"></div></div>
                   <div class="actions">
-                    <button id="dl-add-library" class="btn" hidden>Add to library</button>
                     <button id="dl-open" class="btn">Open</button>
                     <button id="dl-change" class="btn">Change…</button>
                   </div>
@@ -471,7 +479,6 @@
                   <div class="row">
                     <div><div class="label">Download folder</div><div id="slsk-folder" class="hint path"></div></div>
                     <div class="actions">
-                      <button id="slsk-add-library" class="btn" hidden>Add to library</button>
                       <button id="slsk-open" class="btn">Open</button>
                       <button id="slsk-change" class="btn">Change…</button>
                     </div>

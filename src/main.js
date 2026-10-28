@@ -22,6 +22,7 @@ const el = {
 const state = {
   settings: { folders: [], volume: 0.7, preferTags: false },
   tracks: [],
+  autoFolders: [], // download folders that are always scanned: [{ path, label }]
   favorites: new Set(), // paths of favourite library songs
   query: "",
   artist: null,   // artist key, null = all artists
@@ -175,7 +176,9 @@ async function load() {
   discordSync();
   // libraries scanned before grid thumbnails existed get them on this scan
   const needThumbs = state.tracks.some((t) => t.cover && !t.thumb);
-  if (state.settings.folders.length && (prefs.scanOnStart || !state.tracks.length || needThumbs)) rescan(false);
+  await refreshAutoFolders();
+  const hasFolders = state.settings.folders.length || state.autoFolders.length;
+  if (hasFolders && (prefs.scanOnStart || !state.tracks.length || needThumbs)) rescan(false);
 }
 
 async function rescan(full) {
@@ -221,14 +224,40 @@ async function removeFolder(folder) {
   state.tracks = snap.tracks;
   renderFolders();
   applySearch();
+  if (state.autoFolders.length) rescan(false);
 }
 
 function renderFolders() {
   const folders = state.settings.folders;
-  el.folderList.innerHTML = folders.length
-    ? folders.map((f, i) => `<li><span title="${esc(f)}">${esc(f)}</span><button data-i="${i}" title="Remove from library">Remove</button></li>`).join("")
-    : `<li class="none">No folders yet</li>`;
+  const auto = state.autoFolders.filter((a) => !folders.some((f) => a.path.toLowerCase().startsWith(f.toLowerCase())));
+  el.folderList.innerHTML =
+    folders.map((f, i) => `<li><span title="${esc(f)}">${esc(f)}</span><button data-i="${i}" title="Remove from library">Remove</button></li>`).join("") +
+    auto.map((a) => `<li class="auto"><span title="${esc(a.path)}">${esc(a.path)}</span><em>${esc(a.label)} · automatic</em></li>`).join("") ||
+    `<li class="none">No folders yet</li>`;
+  renderLocalHint();
 }
+
+/** The download folders that are always in the library (once they exist). */
+async function refreshAutoFolders() {
+  try {
+    const r = await invoke("library_auto_folders");
+    state.autoFolders = r.auto;
+    state.settings.folders = r.folders;
+  } catch {
+    state.autoFolders = [];
+  }
+  renderFolders();
+}
+
+/** Offer to add a folder while the library only has downloads in it. */
+function renderLocalHint() {
+  $("local-hint").hidden = !!state.settings.folders.length || !state.tracks.length || !!prefs.hideLocalHint || state.source !== "local";
+}
+$("local-hint-add").addEventListener("click", addFolder);
+$("local-hint-close").addEventListener("click", () => {
+  setPref("hideLocalHint", true);
+  renderLocalHint();
+});
 
 // -------------------------------------------------------------- rendering
 
@@ -242,6 +271,7 @@ function applySearch() {
   const hasLibrary = state.tracks.length || state.settings.folders.length;
   el.empty.hidden = !!hasLibrary;
   el.library.hidden = !hasLibrary;
+  renderLocalHint();
   renderArtists();
 }
 
@@ -1917,7 +1947,7 @@ async function runDownloads() {
     setStatus(`Downloads finished${failed ? ` · ${failed} failed — see Downloads` : ""}`, 5000);
   }
   // pick the new files up when the download folder is part of the library
-  if (saved && (await downloadsInLibrary())) rescan(false);
+  if (saved) refreshAutoFolders().then(() => rescan(false));
 }
 
 listen("dl-progress", ({ payload }) => {
@@ -1931,11 +1961,6 @@ listen("dl-progress", ({ payload }) => {
   Object.assign(it, { done: payload.done, total: payload.total ?? it.total, lastAt: now });
   renderDownloadProgress();
 });
-
-async function downloadsInLibrary() {
-  const folder = (await invoke("dl_folder")).toLowerCase();
-  return state.settings.folders.some((f) => folder.startsWith(f.toLowerCase()));
-}
 
 // right-click a list (Likes, a playlist, search results) to download all of it
 el.artistList.addEventListener("contextmenu", async (e) => {
@@ -1973,7 +1998,6 @@ async function renderDownloadSettings() {
   if (document.activeElement !== $("dl-ytdlp-path")) $("dl-ytdlp-path").value = d.ytdlpPath || "";
   if (!d.useYtdlp) $("dl-ytdlp-status").textContent = "";
   $("dl-folder").textContent = await invoke("dl_folder");
-  $("dl-add-library").hidden = await downloadsInLibrary();
 }
 
 async function saveYtdlp() {
@@ -2010,14 +2034,9 @@ $("dl-change").addEventListener("click", async () => {
   const settings = await invoke("dl_pick_folder");
   if (settings) state.settings = settings;
   renderDownloadSettings();
+  if (settings) refreshAutoFolders().then(() => rescan(false));
 });
 $("dl-open").addEventListener("click", () => invoke("dl_open_folder").catch((e) => setStatus(String(e), 5000)));
-$("dl-add-library").addEventListener("click", async () => {
-  state.settings = await invoke("dl_add_to_library");
-  renderFolders();
-  renderDownloadSettings();
-  rescan(false);
-});
 
 // ----------------------------------------------------------- Downloads page
 
@@ -2588,18 +2607,13 @@ async function pollSlskTransfers() {
   const done = new Set(s.transfers.filter(slskOk).map((x) => x.id));
   if (slskSeenDone && [...done].some((id) => !slskSeenDone.has(id))) {
     clearTimeout(slskRescanTimer);
-    slskRescanTimer = setTimeout(async () => (await slskInLibrary()) && rescan(false), 2500);
+    slskRescanTimer = setTimeout(() => refreshAutoFolders().then(() => rescan(false)), 2500);
   }
   slskSeenDone = done;
   renderDownloads();
   slskSwitchStuck();
   const busy = slskActive() > 0 || !$("downloads").hidden;
   slskTransferTimer = setTimeout(pollSlskTransfers, busy ? 1500 : 15000);
-}
-
-async function slskInLibrary() {
-  const folder = (await invoke("slsk_folder")).toLowerCase();
-  return state.settings.folders.some((f) => folder.startsWith(f.toLowerCase()));
 }
 
 function slskTransferText(x) {
@@ -2706,7 +2720,6 @@ function renderSlskSettings() {
     if (document.activeElement !== $(id)) $(id).value = value ?? "";
   }
   invoke("slsk_folder").then((f) => ($("slsk-folder").textContent = f));
-  slskInLibrary().then((yes) => ($("slsk-add-library").hidden = yes));
 }
 
 async function saveSlskConfig() {
@@ -2746,14 +2759,9 @@ $("slsk-change").addEventListener("click", async () => {
   const settings = await invoke("slsk_pick_folder");
   if (settings) state.settings = settings;
   renderSlskSettings();
+  if (settings) refreshAutoFolders().then(() => rescan(false));
 });
 $("slsk-open").addEventListener("click", () => invoke("slsk_open_folder").catch((e) => setStatus(String(e), 5000)));
-$("slsk-add-library").addEventListener("click", async () => {
-  state.settings = await invoke("slsk_add_to_library");
-  renderFolders();
-  renderSlskSettings();
-  rescan(false);
-});
 $("slsk-empty-setup").addEventListener("click", () => showIntegration("slsk"));
 $("slsk-empty-connect").addEventListener("click", slskConnect);
 
