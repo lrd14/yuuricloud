@@ -59,12 +59,23 @@ jobs:
           releaseBody: |
             Downloads for each system are below.
 
-            - **Windows**: `yuuricloud_x.y.z_x64-setup.exe` (or the `.msi`). Windows may show a SmartScreen warning; click **More info → Run anyway**.
+            - **Windows**: `yuuricloud_x.y.z_x64-setup.exe` (or the `.msi`), or `x64-portable.exe` to run without installing. Windows may show a SmartScreen warning; click **More info → Run anyway**.
             - **macOS**: `aarch64.dmg` for Apple Silicon (M1 and newer), `x64.dmg` for Intel Macs. The app isn't signed, so the first time, right-click it and choose **Open**, or run `xattr -cr /Applications/yuuricloud.app`.
             - **Linux**: `.AppImage` (any distro), `.deb` (Debian/Ubuntu) or `.rpm` (Fedora).
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # The bare exe runs without installing (needs WebView2, which Windows 10 and 11 ship with).
+      - name: Upload Windows portable exe
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="$(jq -r .version src-tauri/tauri.conf.json)"
+          cp src-tauri/target/release/yuuricloud.exe "yuuricloud_${version}_x64-portable.exe"
+          gh release upload "v$version" "yuuricloud_${version}_x64-portable.exe" --clobber
 
   # Publish the release only once every platform has uploaded its files.
   publish:
