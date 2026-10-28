@@ -60,7 +60,7 @@ const DEFAULT_PREFS = {
   showCounts: true, onTop: false,
   animations: true, speed: "1", ambient: true, equalizer: true, hoverLift: true, waveform: true,
   waveHeight: 34, waveStyle: "bars", waveBars: 240, coverColors: true, coverTint: true,
-  appIcon: "yuuri", scView: "list",
+  appIcon: "yuuri", scView: "list", onboarded: false,
   ignoreThe: true, scanOnStart: true,
   singleClick: false, fade: true, rememberModes: false, shuffle: false, repeat: REPEAT_OFF, resume: true,
 };
@@ -179,6 +179,8 @@ async function load() {
   await refreshAutoFolders();
   const hasFolders = state.settings.folders.length || state.autoFolders.length;
   if (hasFolders && (prefs.scanOnStart || !state.tracks.length || needThumbs)) rescan(false);
+  // first start: walk through setting things up
+  if (!prefs.onboarded && !state.settings.folders.length && !state.tracks.length) openOnboarding();
 }
 
 async function rescan(full) {
@@ -235,6 +237,7 @@ function renderFolders() {
     auto.map((a) => `<li class="auto"><span title="${esc(a.path)}">${esc(a.path)}</span><em>${esc(a.label)} · automatic</em></li>`).join("") ||
     `<li class="none">No folders yet</li>`;
   renderLocalHint();
+  $("ob-folders").innerHTML = el.folderList.innerHTML;
 }
 
 /** The download folders that are always in the library (once they exist). */
@@ -1378,15 +1381,15 @@ function openSettings() {
 
 function closeSettings() {
   if (el.settings.hidden) return;
-  if (!prefs.animations) {
-    el.settings.hidden = true;
-    return;
-  }
-  el.settings.classList.add("closing");
-  setTimeout(() => {
+  // closing during the setup guide counts as skipping the rest of it
+  const hidden = () => {
     el.settings.hidden = true;
     el.settings.classList.remove("closing");
-  }, 240 * Number(prefs.speed));
+    endOnboarding();
+  };
+  if (!prefs.animations) return hidden();
+  el.settings.classList.add("closing");
+  setTimeout(hidden, 240 * Number(prefs.speed));
 }
 
 $("settings-btn").addEventListener("click", openSettings);
@@ -2832,3 +2835,112 @@ for (const b of $("int-nav").children) {
   tileWatcher.observe($(b.dataset.status), { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 }
 syncIntegrationTiles();
+
+// ---------------------------------------------------------------- setup guide
+// A step-by-step walk through the main settings, shown on first start and from Settings → Library.
+// The steps borrow the real controls from the Settings pages (and put them back afterwards), so
+// everything works exactly as it does there.
+
+const ONBOARD_STEPS = ["welcome", "music", "look", "sc", "slsk", "lfm", "discord", "done"];
+const onboard = { active: false, step: 0, borrowed: [] };
+
+/** The Settings controls each step shows. A .group moves as it is; rows are put in a new group. */
+function onboardParts(step) {
+  const group = (id) => $(id).closest(".group");
+  const row = (id) => $(id).closest(".row");
+  return {
+    look: [row("accent-swatches")],
+    sc: [group("sc-status")],
+    slsk: [row("slsk-exe"), $("slsk-tool-status"), group("slsk-user"), row("slsk-status")],
+    lfm: [group("lfm-keys"), group("lfm-status")],
+    discord: [group("discord-id"), group("discord-status")],
+  }[step]?.filter(Boolean) || [];
+}
+
+function borrowControls() {
+  for (const box of el.settings.querySelectorAll(".ob-borrow")) {
+    let holder = null;
+    for (const node of onboardParts(box.dataset.borrow)) {
+      const marker = document.createComment("borrowed by the setup guide");
+      node.before(marker);
+      onboard.borrowed.push({ node, marker });
+      if (node.classList.contains("group")) {
+        box.append(node);
+        holder = null;
+      } else {
+        if (!holder) box.append((holder = Object.assign(document.createElement("div"), { className: "group" })));
+        holder.append(node);
+      }
+    }
+  }
+}
+
+function returnControls() {
+  for (const { node, marker } of onboard.borrowed) marker.replaceWith(node);
+  onboard.borrowed = [];
+  for (const box of el.settings.querySelectorAll(".ob-borrow")) box.innerHTML = "";
+}
+
+function openOnboarding() {
+  if (onboard.active) return;
+  openSettings();
+  onboard.active = true;
+  el.settings.querySelector(".settings").classList.add("onboarding");
+  $("onboard").hidden = false;
+  borrowControls();
+  showOnboardStep(0);
+}
+
+/** Leave the guide (finished or skipped); it isn't shown on its own again. */
+function endOnboarding() {
+  if (!onboard.active) return;
+  onboard.active = false;
+  returnControls();
+  $("onboard").hidden = true;
+  el.settings.querySelector(".settings").classList.remove("onboarding");
+  if (!prefs.onboarded) setPref("onboarded", true);
+}
+
+function showOnboardStep(n) {
+  onboard.step = Math.max(0, Math.min(ONBOARD_STEPS.length - 1, n));
+  const step = ONBOARD_STEPS[onboard.step];
+  for (const page of el.settings.querySelectorAll(".ob-page")) page.hidden = page.dataset.step !== step;
+  $("onboard-dots").innerHTML = ONBOARD_STEPS.map((s, i) => `<i class="${i === onboard.step ? "on" : i < onboard.step ? "past" : ""}"></i>`).join("");
+  const first = step === "welcome", last = step === "done";
+  $("onboard-back").hidden = first;
+  $("onboard-skip").hidden = first || last;
+  $("onboard-quit").hidden = last;
+  $("onboard-next").textContent = first ? "Get started" : last ? "Start listening" : "Next";
+  if (step === "music") renderFolders();
+  if (step === "done") renderOnboardSummary();
+  el.settings.querySelector(".onboard-body").scrollTop = 0;
+}
+
+function renderOnboardSummary() {
+  const folders = state.settings.folders.length;
+  const line = (name, text, on) => `<li class="${on ? "on" : ""}"><b>${esc(name)}</b><span>${esc(text)}</span></li>`;
+  const status = (id) => [$(id).textContent.trim(), $(id).classList.contains("ok")];
+  $("ob-summary").innerHTML =
+    line("Music", folders ? `${folders} folder${folders === 1 ? "" : "s"} added` : "No folders yet — downloads still show up", folders > 0) +
+    line("SoundCloud", ...status("sc-status")) +
+    line("Soulseek", ...status("slsk-status")) +
+    line("Last.fm", ...status("lfm-status")) +
+    line("Discord", ...status("discord-status"));
+}
+
+$("onboard-next").addEventListener("click", () => {
+  if (ONBOARD_STEPS[onboard.step] === "done") return closeSettings();
+  showOnboardStep(onboard.step + 1);
+});
+$("onboard-skip").addEventListener("click", () => showOnboardStep(onboard.step + 1));
+$("onboard-back").addEventListener("click", () => showOnboardStep(onboard.step - 1));
+$("onboard-quit").addEventListener("click", closeSettings);
+$("ob-add-folder").addEventListener("click", addFolder);
+$("ob-folders").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-i]");
+  if (btn) removeFolder(state.settings.folders[Number(btn.dataset.i)]);
+});
+$("run-setup").addEventListener("click", () => {
+  closeSettings();
+  setTimeout(openOnboarding, 260 * Number(prefs.speed));
+});

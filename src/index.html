@@ -336,6 +336,10 @@
               <label class="switch"><input type="checkbox" data-pref="rememberModes" /><span></span></label>
             </div>
             <div class="row">
+              <div><div class="label">Setup guide</div><div class="hint">Walk through adding your music and connecting SoundCloud, Soulseek, Last.fm and Discord again.</div></div>
+              <button id="run-setup" class="btn">Run setup</button>
+            </div>
+            <div class="row">
               <div><div class="label">Reset all settings</div><div class="hint">Puts every option on this page back to its default. Your library is kept.</div></div>
               <button id="reset-prefs" class="btn danger">Reset</button>
             </div>
@@ -574,6 +578,82 @@
               </div>
             </section>
           </div>
+        </div>
+        <div id="onboard" class="onboard" hidden>
+          <header class="onboard-head">
+            <div id="onboard-dots" class="onboard-dots"></div>
+            <button id="onboard-quit" class="btn small">Skip setup</button>
+          </header>
+          <div class="onboard-body">
+            <section class="ob-page ob-welcome" data-step="welcome">
+              <img class="ob-logo" src="icons/app-yuuri.png" alt="" />
+              <h2>Welcome to yuuricloud</h2>
+              <p class="hint">
+                Let's get you set up. Every step is optional: skip anything you don't need, and change it all later in
+                Settings.
+              </p>
+            </section>
+            <section class="ob-page" data-step="music" hidden>
+              <h2>Your music</h2>
+              <p class="hint">
+                Add the folders where you keep your music. Songs you download from SoundCloud or Soulseek show up in
+                your library on their own.
+              </p>
+              <ul id="ob-folders" class="folder-list"></ul>
+              <button id="ob-add-folder" class="btn accent">Add folder…</button>
+            </section>
+            <section class="ob-page" data-step="look" hidden>
+              <h2>Make it yours</h2>
+              <p class="hint">Pick an accent color. There's lots more to change in Settings → Appearance.</p>
+              <div class="ob-borrow" data-borrow="look"></div>
+            </section>
+            <section class="ob-page" data-step="sc" hidden>
+              <h2>SoundCloud</h2>
+              <p class="hint">
+                Play your SoundCloud likes and playlists in yuuricloud. Click <b>Connect</b> and sign in with your
+                SoundCloud account in the browser.
+              </p>
+              <div class="ob-borrow" data-borrow="sc"></div>
+            </section>
+            <section class="ob-page" data-step="slsk" hidden>
+              <h2>Soulseek</h2>
+              <p class="hint">
+                Search and download music from the Soulseek network. Click <b>Download for me</b> to get slskd, the
+                program yuuricloud uses for it, enter your Soulseek login, then <b>Connect</b>. What you download or share is
+                your responsibility.
+              </p>
+              <div class="ob-borrow" data-borrow="slsk"></div>
+            </section>
+            <section class="ob-page" data-step="lfm" hidden>
+              <h2>Last.fm</h2>
+              <p class="hint">
+                Scrobble what you play to your Last.fm profile. You need your own API account:
+                <a href="#" data-open="https://www.last.fm/api/account/create">create one here</a> (any name works),
+                paste its key and shared secret, save, then connect.
+              </p>
+              <div class="ob-borrow" data-borrow="lfm"></div>
+            </section>
+            <section class="ob-page" data-step="discord" hidden>
+              <h2>Discord</h2>
+              <p class="hint">
+                Show what you're listening to on your Discord profile.
+                <a href="#" data-open="https://discord.com/developers/applications">Create an application</a>, name it
+                what you want the status to say, and paste its Application ID.
+              </p>
+              <div class="ob-borrow" data-borrow="discord"></div>
+            </section>
+            <section class="ob-page" data-step="done" hidden>
+              <h2>You're all set</h2>
+              <p class="hint">Here's what you've set up. You can change any of it in Settings.</p>
+              <ul id="ob-summary" class="ob-summary"></ul>
+            </section>
+          </div>
+          <footer class="onboard-foot">
+            <button id="onboard-back" class="btn">Back</button>
+            <span class="spacer"></span>
+            <button id="onboard-skip" class="btn">Skip</button>
+            <button id="onboard-next" class="btn accent">Next</button>
+          </footer>
         </div>
       </section>
     </div>

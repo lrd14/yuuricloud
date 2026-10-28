@@ -630,3 +630,35 @@ tr.slsk-group.closed .caret { transform: rotate(-90deg); }
 .local-hint .icon-btn { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; }
 .local-hint svg.x { width: 9px; height: 9px; stroke: currentColor; stroke-width: 1.6; fill: none; }
 .folder-list li.auto em { font-style: normal; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+
+/* Setup guide: shown in the Settings window in place of its tabs */
+.onboard { display: none; flex: 1; min-height: 0; flex-direction: column; }
+.settings.onboarding .onboard { display: flex; }
+.settings.onboarding .settings-head, .settings.onboarding .settings-tabs, .settings.onboarding .settings-body { display: none; }
+.onboard-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 6px 24px; }
+.onboard-dots { display: flex; gap: 6px; }
+.onboard-dots i { width: 8px; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.18); transition: width var(--t-med) var(--ease), background var(--t-med); }
+.onboard-dots i.past { background: color-mix(in srgb, var(--accent-base) 55%, rgba(255, 255, 255, 0.2)); }
+.onboard-dots i.on { width: 22px; background: var(--accent); }
+.onboard-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 28px 16px; }
+.ob-page { animation: rise-in var(--t-slow) var(--ease); }
+.ob-page h2 { margin: 10px 0 6px; font-size: 22px; font-weight: 650; }
+.ob-page > .hint { font-size: 13px; line-height: 1.55; margin: 0 0 16px; }
+.ob-page .group + .group { margin-top: 12px; }
+.ob-welcome { display: flex; flex-direction: column; align-items: center; text-align: center; padding-top: 40px; }
+.ob-welcome .hint { max-width: 420px; }
+.ob-logo { width: 104px; height: 104px; border-radius: 26px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4); margin-bottom: 8px; }
+.ob-page .folder-list { margin-top: 0; }
+.ob-summary { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ob-summary li {
+  display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: center; padding: 10px 14px;
+  border-radius: 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
+}
+.ob-summary li span { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ob-summary li b::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25); vertical-align: 1px;
+}
+.ob-summary li.on b::before { background: #3fbf7f; }
+.onboard-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }
+.onboard-foot .spacer { flex: 1; }
