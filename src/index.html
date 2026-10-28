@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>yuuricloud</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="titlebar" data-tauri-drag-region>
+      <div class="brand" data-tauri-drag-region>
+        <img id="brand-icon" class="logo-img" src="icons/app-yuuri.png" alt="" />
+        <span>yuuricloud</span>
+      </div>
+      <div id="source" class="segmented source-switch">
+        <button data-source="local" class="on">Library</button>
+        <button data-source="sc">SoundCloud</button>
+      </div>
+      <label class="search">
+        <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
+        <input id="search" type="search" placeholder="Search artists, albums, songs" autocomplete="off" spellcheck="false" />
+        <kbd>Ctrl F</kbd>
+      </label>
+      <button id="add-folder" class="btn">Add folder</button>
+      <button id="rescan" class="btn">Rescan</button>
+      <button id="sc-refresh" class="btn" title="Reload your likes and playlists">Refresh</button>
+      <button id="downloads-btn" class="icon-btn dl-btn" title="Downloads">
+        <svg viewBox="0 0 24 24"><use href="#i-download" /></svg>
+        <span id="dl-badge" class="dl-badge" hidden></span>
+      </button>
+      <button id="settings-btn" class="icon-btn" title="Settings (Ctrl ,)">
+        <svg viewBox="0 0 24 24"><use href="#i-gear" /></svg>
+      </button>
+      <div class="win-controls">
+        <button id="win-min" class="win-btn" title="Minimize">
+          <svg viewBox="0 0 12 12"><path d="M1.5 6h9" /></svg>
+        </button>
+        <button id="win-max" class="win-btn" title="Maximize">
+          <svg viewBox="0 0 12 12"><path id="win-max-icon" d="M2 2h8v8H2z" /></svg>
+        </button>
+        <button id="win-close" class="win-btn close" title="Close">
+          <svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <section id="empty" class="empty" hidden>
+      <svg viewBox="0 0 24 24"><use href="#i-note" /></svg>
+      <p>Your library is empty.<br />Add a folder with your music to get started.</p>
+      <button id="empty-add" class="btn accent">Add music folder</button>
+    </section>
+
+    <section id="sc-empty" class="empty" hidden>
+      <svg viewBox="0 0 24 24"><use href="#i-cloud" /></svg>
+      <p>Connect your SoundCloud account to play your likes and playlists here.</p>
+      <button id="sc-open-settings" class="btn accent">Set up SoundCloud</button>
+    </section>
+
+    <section id="downloads" class="downloads-page" hidden>
+      <header class="dl-head">
+        <div>
+          <h1>Downloads</h1>
+          <div id="dl-summary" class="hint"></div>
+        </div>
+        <div class="actions">
+          <button id="dl-pause" class="btn">Pause</button>
+          <button id="dl-clear" class="btn">Clear finished</button>
+          <button id="dl-open-folder" class="btn">Open folder</button>
+          <button id="dl-close" class="icon-btn" title="Back to the library">
+            <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+          </button>
+        </div>
+      </header>
+      <div class="dl-scroll">
+        <div id="dl-current"></div>
+        <h2 id="dl-next-title" class="dl-section">Up next</h2>
+        <div id="dl-next" class="dl-list"></div>
+        <h2 id="dl-done-title" class="dl-section">Finished</h2>
+        <div id="dl-done" class="dl-list"></div>
+      </div>
+    </section>
+
+    <main id="library">
+      <aside class="panel artists">
+        <h2 id="artists-title">Artists</h2>
+        <ul id="artist-list" class="list" tabindex="0"></ul>
+      </aside>
+      <section class="right">
+        <section class="panel albums">
+          <h2 id="albums-title">Albums</h2>
+          <div id="album-grid" class="grid"></div>
+        </section>
+        <section class="panel songs">
+          <div class="panel-head">
+            <h2 id="songs-title">Songs</h2>
+            <div id="sc-view" class="segmented view-switch">
+              <button data-view="list" title="List"><svg viewBox="0 0 24 24"><use href="#i-list" /></svg></button>
+              <button data-view="grid" title="Covers"><svg viewBox="0 0 24 24"><use href="#i-grid" /></svg></button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table id="song-table">
+              <thead>
+                <tr><th class="num">#</th><th>Title</th><th>Artist</th><th class="col-album">Album</th><th class="time">Time</th></tr>
+              </thead>
+              <tbody id="song-body"></tbody>
+            </table>
+          </div>
+          <div id="song-grid" class="grid song-grid"></div>
+        </section>
+      </section>
+    </main>
+
+    <footer class="player">
+      <div id="ambient" class="ambient"></div>
+      <div class="now">
+        <div id="now-cover" class="cover small"></div>
+        <div class="now-text">
+          <div id="now-title" class="now-title" title="Show this song in the library">Nothing playing</div>
+          <div id="now-artist" class="now-artist" title="Show this artist"></div>
+        </div>
+        <button id="locate" class="icon-btn locate" title="Show the playing song and album (Ctrl+L)" hidden>
+          <svg viewBox="0 0 24 24"><use href="#i-locate" /></svg>
+        </button>
+      </div>
+      <div class="controls">
+        <div class="buttons">
+          <button id="shuffle" class="icon-btn toggle" title="Shuffle"><svg viewBox="0 0 24 24"><use href="#i-shuffle" /></svg></button>
+          <button id="prev" class="icon-btn" title="Previous (Ctrl ←)"><svg viewBox="0 0 24 24"><use href="#i-prev" /></svg></button>
+          <button id="play" class="play-btn" title="Play / Pause (Space)"><svg viewBox="0 0 24 24"><use id="play-icon" href="#i-play" /></svg></button>
+          <button id="next" class="icon-btn" title="Next (Ctrl →)"><svg viewBox="0 0 24 24"><use href="#i-next" /></svg></button>
+          <button id="repeat" class="icon-btn toggle" title="Repeat: off"><svg viewBox="0 0 24 24"><use id="repeat-icon" href="#i-repeat" /></svg></button>
+        </div>
+        <div class="seek-row">
+          <span id="pos" class="time">0:00</span>
+          <div class="seek-wrap">
+            <canvas id="wave" class="wave"></canvas>
+            <input id="seek" class="range" type="range" min="0" max="0" step="0.1" value="0" />
+          </div>
+          <span id="dur" class="time">0:00</span>
+        </div>
+      </div>
+      <div class="volume">
+        <button id="mute" class="icon-btn" title="Mute"><svg viewBox="0 0 24 24"><use id="vol-icon" href="#i-volume" /></svg></button>
+        <input id="volume" class="range" type="range" min="0" max="1" step="0.01" value="0.7" />
+      </div>
+    </footer>
+    <div id="status" class="status"></div>
+
+    <div id="settings" class="settings-backdrop" hidden>
+      <section class="settings" role="dialog" aria-labelledby="settings-title">
+        <header class="settings-head">
+          <h1 id="settings-title">Settings</h1>
+          <button id="settings-close" class="icon-btn" title="Close (Esc)">
+            <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+          </button>
+        </header>
+        <nav class="settings-tabs">
+          <button data-tab="appearance" class="on">Appearance</button>
+          <button data-tab="motion">Animations</button>
+          <button data-tab="library">Library</button>
+          <button data-tab="playback">Playback</button>
+          <button data-tab="integrations">Integrations</button>
+        </nav>
+
+        <div class="settings-body">
+          <div class="tab" data-tab="appearance">
+            <div class="row">
+              <div><div class="label">App icon</div><div class="hint">Shown in the title bar and on the taskbar while the app is open.</div></div>
+              <div class="icon-choices">
+                <button class="icon-choice" data-icon="yuuri" title="Yuuri"><img src="icons/app-yuuri.png" alt="Yuuri" /></button>
+                <button class="icon-choice" data-icon="cloud" title="Cloud"><img src="icons/app-cloud.png" alt="Cloud" /></button>
+              </div>
+            </div>
+            <div class="row">
+              <div><div class="label">Accent color</div><div class="hint">Used for highlights, sliders and the playing song.</div></div>
+              <div id="accent-swatches" class="swatches"></div>
+            </div>
+            <div class="row">
+              <div><div class="label">Match colors to the album cover</div><div class="hint">Take the accent color from the cover of the song that's playing. Falls back to the color above for black-and-white or missing covers.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="coverColors" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Tint the background too</div><div class="hint">Give the whole window a faint wash of the accent color.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="coverTint" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Background blur</div><div class="hint">Blur whatever is behind the window. Not available on Linux.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="blur" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Background darkness</div><div class="hint">Lower lets more of the desktop show through.</div></div>
+              <input type="range" class="range pref-range" data-pref="tint" min="0.15" max="0.98" step="0.01" />
+            </div>
+            <div class="row">
+              <div><div class="label">Album cover size</div></div>
+              <div class="segmented" data-pref="coverSize">
+                <button data-value="small">Small</button><button data-value="medium">Medium</button><button data-value="large">Large</button>
+              </div>
+            </div>
+            <div class="row">
+              <div><div class="label">Interface size</div></div>
+              <div class="segmented" data-pref="scale">
+                <button data-value="0.9">90%</button><button data-value="1">100%</button><button data-value="1.1">110%</button><button data-value="1.25">125%</button>
+              </div>
+            </div>
+            <div class="row">
+              <div><div class="label">Compact song list</div><div class="hint">Shorter rows so more songs fit.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="compact" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Show artist song counts</div></div>
+              <label class="switch"><input type="checkbox" data-pref="showCounts" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Keep window on top</div></div>
+              <label class="switch"><input type="checkbox" data-pref="onTop" /><span></span></label>
+            </div>
+          </div>
+
+          <div class="tab" data-tab="motion" hidden>
+            <div class="row">
+              <div><div class="label">Animations</div><div class="hint">Turn off all motion in the app.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="animations" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Animation speed</div></div>
+              <div class="segmented" data-pref="speed">
+                <button data-value="0.6">Fast</button><button data-value="1">Normal</button><button data-value="1.6">Relaxed</button>
+              </div>
+            </div>
+            <div class="row">
+              <div><div class="label">Ambient glow</div><div class="hint">Soft glow from the current album cover behind the player.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="ambient" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Waveform seek bar</div><div class="hint">Show the song's waveform in the progress bar, like SoundCloud. Click anywhere on it to jump there.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="waveform" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Waveform height</div><div class="hint">How tall the loudest parts reach.</div></div>
+              <input type="range" class="range pref-range" data-pref="waveHeight" min="14" max="64" step="2" />
+            </div>
+            <div class="row">
+              <div><div class="label">Waveform detail</div><div class="hint">How many bars the waveform is made of (16–2000). More bars show more detail; very high counts get thinner than a pixel and blend together.</div></div>
+              <input type="number" class="num-input" data-pref="waveBars" min="16" max="2000" step="10" />
+            </div>
+            <div class="row">
+              <div><div class="label">Waveform style</div><div class="hint">Separate bars, or one smooth flowing shape.</div></div>
+              <div class="segmented" data-pref="waveStyle">
+                <button data-value="bars">Bars</button><button data-value="smooth">Smooth</button>
+              </div>
+            </div>
+            <div class="row">
+              <div><div class="label">Playing indicator</div><div class="hint">Animated bars next to the song that's playing.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="equalizer" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Hover effects</div><div class="hint">Album covers lift when you point at them.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="hoverLift" /><span></span></label>
+            </div>
+          </div>
+
+          <div class="tab" data-tab="library" hidden>
+            <div class="label">Music folders</div>
+            <ul id="folder-list" class="folder-list"></ul>
+            <button id="settings-add-folder" class="btn">Add folder…</button>
+            <div class="row">
+              <div><div class="label">Name artists and albums from file tags</div><div class="hint">On: use the artist and album written in each song file, and only fall back to folder names when a file has none. Off: trust the folder layout (Artist/Album) first. Rescans the library.</div></div>
+              <label class="switch"><input id="prefer-tags" type="checkbox" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Ignore “The” when sorting</div><div class="hint">“The Beatles” sorts under B.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="ignoreThe" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Rescan on startup</div><div class="hint">Look for new or changed files every time the app opens.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="scanOnStart" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Full rescan</div><div class="hint">Re-read every file instead of only changed ones.</div></div>
+              <button id="full-rescan" class="btn">Rescan everything</button>
+            </div>
+          </div>
+
+          <div class="tab" data-tab="playback" hidden>
+            <div class="row">
+              <div><div class="label">Resume where you left off</div><div class="hint">Reopen on the same song, position, queue and view you had when you closed the app.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="resume" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Play songs with a single click</div><div class="hint">Otherwise double-click a song to play it.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="singleClick" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Fade on play and pause</div><div class="hint">Ease the volume in and out instead of cutting.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="fade" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Remember shuffle and repeat</div></div>
+              <label class="switch"><input type="checkbox" data-pref="rememberModes" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Reset all settings</div><div class="hint">Puts every option on this page back to its default. Your library is kept.</div></div>
+              <button id="reset-prefs" class="btn danger">Reset</button>
+            </div>
+          </div>
+
+          <div class="tab" data-tab="integrations" hidden>
+            <h3 class="section">SoundCloud</h3>
+            <p class="hint">
+              Play your SoundCloud likes and playlists in the SoundCloud tab. Click <b>Connect</b> and sign in with your
+              SoundCloud account in the browser.
+            </p>
+            <div class="row">
+              <div><div class="label">Account</div><div id="sc-status" class="hint">Not connected</div></div>
+              <div class="actions">
+                <button id="sc-connect" class="btn">Connect</button>
+                <button id="sc-cancel" class="btn" hidden>Cancel</button>
+                <button id="sc-disconnect" class="btn danger" hidden>Disconnect</button>
+              </div>
+            </div>
+            <div class="row">
+              <div><div class="label">Download folder</div><div id="dl-folder" class="hint path"></div></div>
+              <div class="actions">
+                <button id="dl-add-library" class="btn" hidden>Add to library</button>
+                <button id="dl-open" class="btn">Open</button>
+                <button id="dl-change" class="btn">Change…</button>
+              </div>
+            </div>
+            <div class="row">
+              <div>
+                <div class="label">Use yt-dlp for other songs</div>
+                <div class="hint">
+                  Songs whose artist allows downloads are saved straight from SoundCloud. For any other song you can use
+                  <a href="#" data-open="https://github.com/yt-dlp/yt-dlp#installation">yt-dlp</a>, which you install
+                  yourself. Saving songs the artist hasn't made downloadable is against SoundCloud's terms, so it's off
+                  unless you turn it on.
+                </div>
+              </div>
+              <label class="switch"><input id="dl-ytdlp" type="checkbox" /><span></span></label>
+            </div>
+            <div id="dl-ytdlp-fields" class="fields">
+              <label>yt-dlp program (leave empty if it's on your PATH)<input id="dl-ytdlp-path" type="text" spellcheck="false" autocomplete="off" placeholder="yt-dlp" /></label>
+              <button id="dl-ytdlp-check" class="btn">Check</button>
+            </div>
+            <div id="dl-ytdlp-status" class="hint"></div>
+            <details id="sc-own" class="own-app">
+              <summary>Use your own SoundCloud app</summary>
+            <p class="hint">
+              Optional. Registering an app needs an <b>Artist Pro</b> subscription:
+              <a href="#" data-open="https://soundcloud.com/you/apps">your apps</a>. Paste its Client ID and Client Secret
+              below. The redirect URI here must be <b>exactly</b> the one saved in your SoundCloud app; if SoundCloud's
+              sign-in page stays blank, they don't match. It has to be <code>http://127.0.0.1:</code> or
+              <code>http://localhost:</code> with a port and a path. Clear both keys and save to go back to the built-in app.
+            </p>
+            <div class="fields">
+              <label>Redirect URI<input id="sc-redirect" type="text" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8974/callback" /></label>
+              <button id="sc-copy-redirect" class="btn">Copy</button>
+            </div>
+            <div class="fields">
+              <label>Client ID<input id="sc-id" type="text" spellcheck="false" autocomplete="off" /></label>
+              <label>Client Secret<input id="sc-secret" type="password" spellcheck="false" autocomplete="off" /></label>
+              <button id="sc-save" class="btn">Save keys</button>
+            </div>
+            </details>
+
+            <h3 class="section">Last.fm</h3>
+            <p class="hint">
+              Scrobble what you play to your Last.fm profile. You need your own API account:
+              <a href="#" data-open="https://www.last.fm/api/account/create">create one here</a>
+              (any name and description work), then paste its key and shared secret below.
+            </p>
+            <div id="lfm-keys" class="fields">
+              <label>API key<input id="lfm-key" type="text" spellcheck="false" autocomplete="off" /></label>
+              <label>Shared secret<input id="lfm-secret" type="password" spellcheck="false" autocomplete="off" /></label>
+              <button id="lfm-save" class="btn">Save keys</button>
+            </div>
+            <div class="row">
+              <div><div class="label">Account</div><div id="lfm-status" class="hint">Not connected</div></div>
+              <div class="actions">
+                <button id="lfm-connect" class="btn">Connect</button>
+                <button id="lfm-finish" class="btn accent small" hidden>I've approved it</button>
+                <button id="lfm-disconnect" class="btn danger" hidden>Disconnect</button>
+              </div>
+            </div>
+            <div class="row">
+              <div><div class="label">Scrobble songs</div><div class="hint">A song counts after half of it (or 4 minutes) has played. Songs under 30 seconds are skipped.</div></div>
+              <label class="switch"><input id="lfm-scrobble" type="checkbox" /><span></span></label>
+            </div>
+
+            <h3 class="section">Discord</h3>
+            <p class="hint">
+              Show what you're listening to on your Discord profile. Discord needs an application to show the status:
+              <a href="#" data-open="https://discord.com/developers/applications">create one</a>, name it what you want the
+              status to say (e.g. “yuuricloud”), and paste its Application ID here. If Last.fm keys are set, album covers are shown too.
+            </p>
+            <div class="fields">
+              <label>Application ID<input id="discord-id" type="text" inputmode="numeric" spellcheck="false" autocomplete="off" /></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Show listening status</div><div id="discord-status" class="hint">Off</div></div>
+              <label class="switch"><input id="discord-enabled" type="checkbox" /><span></span></label>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div id="ctx" class="ctx-menu" role="menu" hidden></div>
+  <svg width="0" height="0" style="position:absolute">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" /></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.2v14H7zm6.8 0H17v14h-3.2z" /></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z" /></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z" /></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4zm.33 9.41-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04z" /></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z" /></symbol>
+    <symbol id="i-repeat-one" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2zm-4-2V9h-1l-2 1v1h1.5v4z" /></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.5 4.5 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z" /></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9zm13.59 3L14 9.41 15.41 8 18 10.59 20.59 8 22 9.41 19.41 12 22 14.59 20.59 16 18 13.41 15.41 16 14 14.59z" /></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3z" /></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z" /></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.61l-1.92-3.32a.5.5 0 0 0-.59-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54a7.4 7.4 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.59.22L2.7 8.87a.5.5 0 0 0 .12.61l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54c.05.24.25.42.49.42h3.84c.24 0 .45-.18.49-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.5.5 0 0 0-.12-.61zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z" /></symbol>
+    <symbol id="i-locate" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.94 3A9 9 0 0 0 13 3.06V1h-2v2.06A9 9 0 0 0 3.06 11H1v2h2.06A9 9 0 0 0 11 20.94V23h2v-2.06A9 9 0 0 0 20.94 13H23v-2zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z" /></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4a7.5 7.5 0 0 0-6.65 4.04A6 6 0 0 0 6 20h13a5 5 0 0 0 .35-9.96z" /></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 5h18v2.5H3zm0 5.75h18v2.5H3zM3 16.5h18V19H3z" /></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 0h8v8h-8z" /></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 21.35 10.55 20C5.4 15.36 2 12.28 2 8.5A5.42 5.42 0 0 1 7.5 3c1.74 0 3.41.81 4.5 2.09A6 6 0 0 1 16.5 3 5.42 5.42 0 0 1 22 8.5c0 3.78-3.4 6.86-8.55 11.54z" /></symbol>
+    <symbol id="i-heart-outline" viewBox="0 0 24 24"><path d="M16.5 3A6 6 0 0 0 12 5.09 6 6 0 0 0 7.5 3 5.42 5.42 0 0 0 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5A5.42 5.42 0 0 0 16.5 3zm-4.4 15.55-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z" /></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z" /></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3zm5 16H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2z" /></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M3.9 12A3.1 3.1 0 0 1 7 8.9h4V7H7a5 5 0 0 0 0 10h4v-1.9H7A3.1 3.1 0 0 1 3.9 12zM8 13h8v-2H8zm9-6h-4v1.9h4a3.1 3.1 0 0 1 0 6.2h-4V17h4a5 5 0 0 0 0-10z" /></symbol>
+    <symbol id="i-queue" viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 4h12v2H3zm0 4h8v2H3zm14 0v-4h2v4h4v2h-4v4h-2v-4h-4v-2z" /></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M5 20h14v-2H5zM19 9h-4V3H9v6H5l7 7z" /></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></symbol>
+    <symbol id="i-to-top" viewBox="0 0 24 24"><path d="M5 4h14v2H5zm7 4-6 6h4v6h4v-6h4z" /></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" /></symbol>
+  </svg>
+  <script src="main.js"></script>
+</body>
+</html>

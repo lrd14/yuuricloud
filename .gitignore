@@ -1,0 +1,6 @@
+__pycache__/
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+soundcloud-proxy/.wrangler/
+dist/
