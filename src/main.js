@@ -1562,10 +1562,7 @@ function scReset() {
 }
 
 $("sc-refresh").addEventListener("click", () => scLoad());
-$("sc-open-settings").addEventListener("click", () => {
-  openSettings();
-  el.settings.querySelector('.settings-tabs [data-tab="integrations"]').click();
-});
+$("sc-open-settings").addEventListener("click", () => showIntegration("sc"));
 
 /** Show the playing SoundCloud song in its list. */
 function jumpToScTrack(t) {
@@ -2701,6 +2698,7 @@ function renderSlskSettings() {
   $("slsk-managed").checked = !c.external;
   $("slsk-managed-fields").hidden = !!c.external;
   $("slsk-external-fields").hidden = !c.external;
+  $("slsk-managed-groups").hidden = !!c.external;
   $("slsk-share").checked = c.shareLibrary !== false;
   $("slsk-auto").checked = !!c.autoConnect;
   $("slsk-exe").textContent = c.exePath || "Not installed yet";
@@ -2756,11 +2754,7 @@ $("slsk-add-library").addEventListener("click", async () => {
   renderSlskSettings();
   rescan(false);
 });
-$("slsk-empty-setup").addEventListener("click", () => {
-  openSettings();
-  el.settings.querySelector('.settings-tabs [data-tab="integrations"]').click();
-  $("slsk-section").scrollIntoView({ block: "start" });
-});
+$("slsk-empty-setup").addEventListener("click", () => showIntegration("slsk"));
 $("slsk-empty-connect").addEventListener("click", slskConnect);
 
 // ------------------------------------------- "Download for me" (yt-dlp, slskd)
@@ -2795,3 +2789,38 @@ listen("tool-progress", ({ payload }) => {
 $("dl-ytdlp-get").addEventListener("click", () => installTool("yt-dlp"));
 $("slsk-get").addEventListener("click", () => installTool("slskd"));
 
+
+// ------------------------------------------- Integrations: one service at a time
+
+/** Open Settings → Integrations on one service ("sc", "slsk", "lfm", "discord"). */
+function showIntegration(key) {
+  openSettings();
+  el.settings.querySelector('.settings-tabs [data-tab="integrations"]').click();
+  selectIntegration(key);
+}
+
+function selectIntegration(key) {
+  for (const b of $("int-nav").children) b.classList.toggle("on", b.dataset.int === key);
+  for (const panel of el.settings.querySelectorAll(".int-panel")) panel.hidden = panel.dataset.int !== key;
+  el.settings.querySelector(".settings-body").scrollTop = 0;
+}
+
+$("int-nav").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-int]");
+  if (b) selectIntegration(b.dataset.int);
+});
+
+/** Each tile repeats its service's status line, with a green dot while it's connected or on. */
+function syncIntegrationTiles() {
+  for (const b of $("int-nav").children) {
+    const status = $(b.dataset.status);
+    // just the gist: "Connected as x · port 2234" -> "Connected"
+    b.querySelector(".state").textContent = status.textContent.split(/ as |[.—(·]/)[0].trim();
+    b.classList.toggle("live", status.classList.contains("ok"));
+  }
+}
+const tileWatcher = new MutationObserver(syncIntegrationTiles);
+for (const b of $("int-nav").children) {
+  tileWatcher.observe($(b.dataset.status), { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+}
+syncIntegrationTiles();

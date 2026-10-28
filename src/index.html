@@ -333,165 +333,239 @@
           </div>
 
           <div class="tab" data-tab="integrations" hidden>
-            <h3 class="section">SoundCloud</h3>
-            <p class="hint">
-              Play your SoundCloud likes and playlists in the SoundCloud tab. Click <b>Connect</b> and sign in with your
-              SoundCloud account in the browser.
-            </p>
-            <div class="row">
-              <div><div class="label">Account</div><div id="sc-status" class="hint">Not connected</div></div>
-              <div class="actions">
-                <button id="sc-connect" class="btn">Connect</button>
-                <button id="sc-cancel" class="btn" hidden>Cancel</button>
-                <button id="sc-disconnect" class="btn danger" hidden>Disconnect</button>
-              </div>
-            </div>
-            <div class="row">
-              <div><div class="label">Download folder</div><div id="dl-folder" class="hint path"></div></div>
-              <div class="actions">
-                <button id="dl-add-library" class="btn" hidden>Add to library</button>
-                <button id="dl-open" class="btn">Open</button>
-                <button id="dl-change" class="btn">Change…</button>
-              </div>
-            </div>
-            <div class="row">
-              <div>
-                <div class="label">Use yt-dlp for other songs</div>
-                <div class="hint">
-                  Songs whose artist allows downloads are saved straight from SoundCloud. For any other song you can use
-                  <a href="#" data-open="https://github.com/yt-dlp/yt-dlp#installation">yt-dlp</a>, which you install
-                  yourself. Saving songs the artist hasn't made downloadable is against SoundCloud's terms, so it's off
-                  unless you turn it on.
-                </div>
-              </div>
-              <label class="switch"><input id="dl-ytdlp" type="checkbox" /><span></span></label>
-            </div>
-            <div id="dl-ytdlp-fields" class="fields">
-              <label>yt-dlp program (leave empty if it's on your PATH)<input id="dl-ytdlp-path" type="text" spellcheck="false" autocomplete="off" placeholder="yt-dlp" /></label>
-              <button id="dl-ytdlp-check" class="btn">Check</button>
-              <button id="dl-ytdlp-get" class="btn">Download for me</button>
-            </div>
-            <div id="dl-ytdlp-status" class="hint"></div>
-            <details id="sc-own" class="own-app">
-              <summary>Use your own SoundCloud app</summary>
-            <p class="hint">
-              Optional. Registering an app needs an <b>Artist Pro</b> subscription:
-              <a href="#" data-open="https://soundcloud.com/you/apps">your apps</a>. Paste its Client ID and Client Secret
-              below. The redirect URI here must be <b>exactly</b> the one saved in your SoundCloud app; if SoundCloud's
-              sign-in page stays blank, they don't match. It has to be <code>http://127.0.0.1:</code> or
-              <code>http://localhost:</code> with a port and a path. Clear both keys and save to go back to the built-in app.
-            </p>
-            <div class="fields">
-              <label>Redirect URI<input id="sc-redirect" type="text" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8974/callback" /></label>
-              <button id="sc-copy-redirect" class="btn">Copy</button>
-            </div>
-            <div class="fields">
-              <label>Client ID<input id="sc-id" type="text" spellcheck="false" autocomplete="off" /></label>
-              <label>Client Secret<input id="sc-secret" type="password" spellcheck="false" autocomplete="off" /></label>
-              <button id="sc-save" class="btn">Save keys</button>
-            </div>
-            </details>
+            <nav id="int-nav" class="int-nav">
+              <button data-int="sc" data-status="sc-status" class="on">
+                <svg viewBox="0 0 24 24"><use href="#i-cloud" /></svg>
+                <span><span class="name">SoundCloud</span><span class="state"></span></span>
+              </button>
+              <button data-int="slsk" data-status="slsk-status">
+                <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
+                <span><span class="name">Soulseek</span><span class="state"></span></span>
+              </button>
+              <button data-int="lfm" data-status="lfm-status">
+                <svg viewBox="0 0 24 24"><use href="#i-bars" /></svg>
+                <span><span class="name">Last.fm</span><span class="state"></span></span>
+              </button>
+              <button data-int="discord" data-status="discord-status">
+                <svg viewBox="0 0 24 24"><use href="#i-chat" /></svg>
+                <span><span class="name">Discord</span><span class="state"></span></span>
+              </button>
+            </nav>
 
-            <h3 id="slsk-section" class="section">Soulseek</h3>
-            <p class="hint">
-              Search and download music from Soulseek in the Soulseek tab. yuuricloud does this through
-              <a href="#" data-open="https://github.com/slskd/slskd">slskd</a>, a free Soulseek program it can download
-              and run for you in the background. Use your Soulseek username and password; a name nobody has taken yet
-              becomes a new free account the first time you connect. Soulseek is a file-sharing network: much of what's
-              on it is copyrighted, and what you download or share is your responsibility.
-            </p>
-            <div class="row">
-              <div><div class="label">Status</div><div id="slsk-status" class="hint">Not connected</div></div>
-              <div class="actions">
-                <button id="slsk-connect" class="btn">Connect</button>
-                <button id="slsk-disconnect" class="btn danger" hidden>Disconnect</button>
-              </div>
-            </div>
-            <div class="row">
-              <div><div class="label">Run slskd for me</div><div class="hint">Turn off to use an slskd you already run yourself.</div></div>
-              <label class="switch"><input id="slsk-managed" type="checkbox" /><span></span></label>
-            </div>
-            <div id="slsk-managed-fields">
-              <div class="row">
-                <div><div class="label">slskd program</div><div id="slsk-exe" class="hint path"></div></div>
-                <div class="actions">
-                  <button id="slsk-get" class="btn">Download for me</button>
-                  <button id="slsk-browse" class="btn">Browse…</button>
-                </div>
-              </div>
-              <div id="slsk-tool-status" class="hint"></div>
-              <div class="fields">
-                <label>Soulseek username<input id="slsk-user" type="text" spellcheck="false" autocomplete="off" /></label>
-                <label>Password<input id="slsk-pass" type="password" spellcheck="false" autocomplete="off" /></label>
-                <label>Listening port<input id="slsk-port" type="number" min="1024" max="65535" placeholder="Automatic" /></label>
-              </div>
+            <!-- SoundCloud -->
+            <section class="int-panel" data-int="sc">
               <p class="hint">
-                If downloads stay queued for a long time, other users may not be able to reach you. Forward the
-                listening port (TCP) to this computer in your router's settings, and set the same number here so it
-                doesn't change.
+                Play your SoundCloud likes and playlists in the SoundCloud tab. Click <b>Connect</b> and sign in with
+                your SoundCloud account in the browser.
               </p>
-              <div class="row">
-                <div>
-                  <div class="label">Share my music library</div>
-                  <div class="hint">Your Soulseek download folder is always shared. Many Soulseek users won't send files to people who share nothing.</div>
-                </div>
-                <label class="switch"><input id="slsk-share" type="checkbox" /><span></span></label>
-              </div>
-              <div class="row">
-                <div><div class="label">Download folder</div><div id="slsk-folder" class="hint path"></div></div>
-                <div class="actions">
-                  <button id="slsk-add-library" class="btn" hidden>Add to library</button>
-                  <button id="slsk-open" class="btn">Open</button>
-                  <button id="slsk-change" class="btn">Change…</button>
+              <h4 class="group-title">Account</h4>
+              <div class="group">
+                <div class="row">
+                  <div><div class="label">SoundCloud account</div><div id="sc-status" class="hint">Not connected</div></div>
+                  <div class="actions">
+                    <button id="sc-connect" class="btn">Connect</button>
+                    <button id="sc-cancel" class="btn" hidden>Cancel</button>
+                    <button id="sc-disconnect" class="btn danger" hidden>Disconnect</button>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div id="slsk-external-fields" class="fields" hidden>
-              <label>slskd address<input id="slsk-url" type="text" spellcheck="false" autocomplete="off" placeholder="http://localhost:5030" /></label>
-              <label>API key<input id="slsk-key" type="password" spellcheck="false" autocomplete="off" /></label>
-            </div>
-            <div class="row">
-              <div><div class="label">Connect when yuuricloud opens</div></div>
-              <label class="switch"><input id="slsk-auto" type="checkbox" /><span></span></label>
-            </div>
 
-            <h3 class="section">Last.fm</h3>
-            <p class="hint">
-              Scrobble what you play to your Last.fm profile. You need your own API account:
-              <a href="#" data-open="https://www.last.fm/api/account/create">create one here</a>
-              (any name and description work), then paste its key and shared secret below.
-            </p>
-            <div id="lfm-keys" class="fields">
-              <label>API key<input id="lfm-key" type="text" spellcheck="false" autocomplete="off" /></label>
-              <label>Shared secret<input id="lfm-secret" type="password" spellcheck="false" autocomplete="off" /></label>
-              <button id="lfm-save" class="btn">Save keys</button>
-            </div>
-            <div class="row">
-              <div><div class="label">Account</div><div id="lfm-status" class="hint">Not connected</div></div>
-              <div class="actions">
-                <button id="lfm-connect" class="btn">Connect</button>
-                <button id="lfm-finish" class="btn accent small" hidden>I've approved it</button>
-                <button id="lfm-disconnect" class="btn danger" hidden>Disconnect</button>
+              <h4 class="group-title">Downloads</h4>
+              <div class="group">
+                <div class="row">
+                  <div><div class="label">Download folder</div><div id="dl-folder" class="hint path"></div></div>
+                  <div class="actions">
+                    <button id="dl-add-library" class="btn" hidden>Add to library</button>
+                    <button id="dl-open" class="btn">Open</button>
+                    <button id="dl-change" class="btn">Change…</button>
+                  </div>
+                </div>
+                <div class="row">
+                  <div>
+                    <div class="label">Use yt-dlp for other songs</div>
+                    <div class="hint">
+                      Songs whose artist allows downloads are saved straight from SoundCloud. Any other song needs
+                      <a href="#" data-open="https://github.com/yt-dlp/yt-dlp#installation">yt-dlp</a>. Saving songs the
+                      artist hasn't made downloadable is against SoundCloud's terms, so it's off unless you turn it on.
+                    </div>
+                  </div>
+                  <label class="switch"><input id="dl-ytdlp" type="checkbox" /><span></span></label>
+                </div>
+                <div id="dl-ytdlp-fields" class="fields">
+                  <label>yt-dlp program (leave empty if it's on your PATH)<input id="dl-ytdlp-path" type="text" spellcheck="false" autocomplete="off" placeholder="yt-dlp" /></label>
+                  <button id="dl-ytdlp-check" class="btn">Check</button>
+                  <button id="dl-ytdlp-get" class="btn">Download for me</button>
+                </div>
+                <div id="dl-ytdlp-status" class="hint group-status"></div>
               </div>
-            </div>
-            <div class="row">
-              <div><div class="label">Scrobble songs</div><div class="hint">A song counts after half of it (or 4 minutes) has played. Songs under 30 seconds are skipped.</div></div>
-              <label class="switch"><input id="lfm-scrobble" type="checkbox" /><span></span></label>
-            </div>
 
-            <h3 class="section">Discord</h3>
-            <p class="hint">
-              Show what you're listening to on your Discord profile. Discord needs an application to show the status:
-              <a href="#" data-open="https://discord.com/developers/applications">create one</a>, name it what you want the
-              status to say (e.g. “yuuricloud”), and paste its Application ID here. If Last.fm keys are set, album covers are shown too.
-            </p>
-            <div class="fields">
-              <label>Application ID<input id="discord-id" type="text" inputmode="numeric" spellcheck="false" autocomplete="off" /></label>
-            </div>
-            <div class="row">
-              <div><div class="label">Show listening status</div><div id="discord-status" class="hint">Off</div></div>
-              <label class="switch"><input id="discord-enabled" type="checkbox" /><span></span></label>
-            </div>
+              <h4 class="group-title">Advanced</h4>
+              <div class="group">
+                <details id="sc-own" class="own-app">
+                  <summary>Use your own SoundCloud app</summary>
+                  <p class="hint">
+                    Optional. Registering an app needs an <b>Artist Pro</b> subscription:
+                    <a href="#" data-open="https://soundcloud.com/you/apps">your apps</a>. Paste its Client ID and Client
+                    Secret below. The redirect URI here must be <b>exactly</b> the one saved in your SoundCloud app; if
+                    SoundCloud's sign-in page stays blank, they don't match. It has to be <code>http://127.0.0.1:</code> or
+                    <code>http://localhost:</code> with a port and a path. Clear both keys and save to go back to the
+                    built-in app.
+                  </p>
+                  <div class="fields">
+                    <label>Redirect URI<input id="sc-redirect" type="text" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8974/callback" /></label>
+                    <button id="sc-copy-redirect" class="btn">Copy</button>
+                  </div>
+                  <div class="fields">
+                    <label>Client ID<input id="sc-id" type="text" spellcheck="false" autocomplete="off" /></label>
+                    <label>Client Secret<input id="sc-secret" type="password" spellcheck="false" autocomplete="off" /></label>
+                    <button id="sc-save" class="btn">Save keys</button>
+                  </div>
+                </details>
+              </div>
+            </section>
+
+            <!-- Soulseek -->
+            <section class="int-panel" data-int="slsk" hidden>
+              <p class="hint">
+                Search and download music from Soulseek in the Soulseek tab. yuuricloud does this through
+                <a href="#" data-open="https://github.com/slskd/slskd">slskd</a>, a free Soulseek program it can download
+                and run for you in the background.
+              </p>
+              <h4 class="group-title">Connection</h4>
+              <div class="group">
+                <div class="row">
+                  <div><div class="label">Soulseek</div><div id="slsk-status" class="hint">Not connected</div></div>
+                  <div class="actions">
+                    <button id="slsk-connect" class="btn">Connect</button>
+                    <button id="slsk-disconnect" class="btn danger" hidden>Disconnect</button>
+                  </div>
+                </div>
+                <div class="row">
+                  <div><div class="label">Connect when yuuricloud opens</div></div>
+                  <label class="switch"><input id="slsk-auto" type="checkbox" /><span></span></label>
+                </div>
+              </div>
+
+              <h4 class="group-title">Account</h4>
+              <div class="group">
+                <div class="row">
+                  <div><div class="label">Run slskd for me</div><div class="hint">Turn off to use an slskd you already run yourself.</div></div>
+                  <label class="switch"><input id="slsk-managed" type="checkbox" /><span></span></label>
+                </div>
+                <div id="slsk-managed-fields">
+                  <div class="fields">
+                    <label>Soulseek username<input id="slsk-user" type="text" spellcheck="false" autocomplete="off" /></label>
+                    <label>Password<input id="slsk-pass" type="password" spellcheck="false" autocomplete="off" /></label>
+                  </div>
+                  <p class="hint group-status">A name nobody has taken yet becomes a new free account the first time you connect.</p>
+                </div>
+                <div id="slsk-external-fields" class="fields" hidden>
+                  <label>slskd address<input id="slsk-url" type="text" spellcheck="false" autocomplete="off" placeholder="http://localhost:5030" /></label>
+                  <label>API key<input id="slsk-key" type="password" spellcheck="false" autocomplete="off" /></label>
+                </div>
+              </div>
+
+              <div id="slsk-managed-groups">
+                <h4 class="group-title">Downloads and sharing</h4>
+                <div class="group">
+                  <div class="row">
+                    <div><div class="label">Download folder</div><div id="slsk-folder" class="hint path"></div></div>
+                    <div class="actions">
+                      <button id="slsk-add-library" class="btn" hidden>Add to library</button>
+                      <button id="slsk-open" class="btn">Open</button>
+                      <button id="slsk-change" class="btn">Change…</button>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div>
+                      <div class="label">Share my music library</div>
+                      <div class="hint">Your Soulseek download folder is always shared. Many Soulseek users won't send files to people who share nothing.</div>
+                    </div>
+                    <label class="switch"><input id="slsk-share" type="checkbox" /><span></span></label>
+                  </div>
+                </div>
+
+                <h4 class="group-title">Program and network</h4>
+                <div class="group">
+                  <div class="row">
+                    <div><div class="label">slskd program</div><div id="slsk-exe" class="hint path"></div></div>
+                    <div class="actions">
+                      <button id="slsk-get" class="btn">Download for me</button>
+                      <button id="slsk-browse" class="btn">Browse…</button>
+                    </div>
+                  </div>
+                  <div id="slsk-tool-status" class="hint group-status"></div>
+                  <div class="fields">
+                    <label>Listening port<input id="slsk-port" type="number" min="1024" max="65535" placeholder="Automatic" /></label>
+                  </div>
+                  <p class="hint group-status">
+                    If downloads stay queued for a long time, other users may not be able to reach you. Forward the
+                    listening port (TCP) to this computer in your router's settings, and set the same number here so it
+                    doesn't change.
+                  </p>
+                </div>
+              </div>
+
+              <p class="hint legal">
+                Soulseek is a file-sharing network: much of what's on it is copyrighted, and what you download or share
+                is your responsibility.
+              </p>
+            </section>
+
+            <!-- Last.fm -->
+            <section class="int-panel" data-int="lfm" hidden>
+              <p class="hint">
+                Scrobble what you play to your Last.fm profile. You need your own API account:
+                <a href="#" data-open="https://www.last.fm/api/account/create">create one here</a>
+                (any name and description work), then paste its key and shared secret below.
+              </p>
+              <h4 class="group-title">API keys</h4>
+              <div class="group">
+                <div id="lfm-keys" class="fields">
+                  <label>API key<input id="lfm-key" type="text" spellcheck="false" autocomplete="off" /></label>
+                  <label>Shared secret<input id="lfm-secret" type="password" spellcheck="false" autocomplete="off" /></label>
+                  <button id="lfm-save" class="btn">Save keys</button>
+                </div>
+              </div>
+              <h4 class="group-title">Account</h4>
+              <div class="group">
+                <div class="row">
+                  <div><div class="label">Last.fm account</div><div id="lfm-status" class="hint">Not connected</div></div>
+                  <div class="actions">
+                    <button id="lfm-connect" class="btn">Connect</button>
+                    <button id="lfm-finish" class="btn accent small" hidden>I've approved it</button>
+                    <button id="lfm-disconnect" class="btn danger" hidden>Disconnect</button>
+                  </div>
+                </div>
+                <div class="row">
+                  <div><div class="label">Scrobble songs</div><div class="hint">A song counts after half of it (or 4 minutes) has played. Songs under 30 seconds are skipped.</div></div>
+                  <label class="switch"><input id="lfm-scrobble" type="checkbox" /><span></span></label>
+                </div>
+              </div>
+            </section>
+
+            <!-- Discord -->
+            <section class="int-panel" data-int="discord" hidden>
+              <p class="hint">
+                Show what you're listening to on your Discord profile. Discord needs an application to show the status:
+                <a href="#" data-open="https://discord.com/developers/applications">create one</a>, name it what you want
+                the status to say (e.g. “yuuricloud”), and paste its Application ID here. If Last.fm keys are set, album
+                covers are shown too.
+              </p>
+              <h4 class="group-title">Application</h4>
+              <div class="group">
+                <div class="fields">
+                  <label>Application ID<input id="discord-id" type="text" inputmode="numeric" spellcheck="false" autocomplete="off" /></label>
+                </div>
+              </div>
+              <h4 class="group-title">Status</h4>
+              <div class="group">
+                <div class="row">
+                  <div><div class="label">Show listening status</div><div id="discord-status" class="hint">Off</div></div>
+                  <label class="switch"><input id="discord-enabled" type="checkbox" /><span></span></label>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
       </section>
@@ -513,6 +587,8 @@
     <symbol id="i-search" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z" /></symbol>
     <symbol id="i-gear" viewBox="0 0 24 24"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.61l-1.92-3.32a.5.5 0 0 0-.59-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54a7.4 7.4 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.59.22L2.7 8.87a.5.5 0 0 0 .12.61l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54c.05.24.25.42.49.42h3.84c.24 0 .45-.18.49-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.5.5 0 0 0-.12-.61zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z" /></symbol>
     <symbol id="i-locate" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.94 3A9 9 0 0 0 13 3.06V1h-2v2.06A9 9 0 0 0 3.06 11H1v2h2.06A9 9 0 0 0 11 20.94V23h2v-2.06A9 9 0 0 0 20.94 13H23v-2zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z" /></symbol>
+    <symbol id="i-bars" viewBox="0 0 24 24"><path d="M4 13h3.5v7H4zm6.25-9h3.5v16h-3.5zM16.5 9H20v11h-3.5z" /></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 1-2z" /></symbol>
     <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4a7.5 7.5 0 0 0-6.65 4.04A6 6 0 0 0 6 20h13a5 5 0 0 0 .35-9.96z" /></symbol>
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 5h18v2.5H3zm0 5.75h18v2.5H3zM3 16.5h18V19H3z" /></symbol>
     <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 0h8v8h-8z" /></symbol>

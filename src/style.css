@@ -589,3 +589,34 @@ tbody tr.slsk-group td.num { cursor: pointer; }
 .caret { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; transition: transform var(--t-fast); vertical-align: middle; }
 tr.slsk-group.closed .caret { transform: rotate(-90deg); }
 .dl-note { margin: -2px 0 8px; }
+
+/* Settings → Integrations: a tile per service, then that service's settings in groups */
+.int-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 6px; }
+.int-nav button {
+  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; text-align: left;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line); border-radius: 11px; color: var(--text);
+}
+.int-nav button:hover { background: var(--hover); }
+.int-nav button.on { background: var(--selected); border-color: transparent; color: #fff; }
+.int-nav button > span { display: flex; flex-direction: column; min-width: 0; }
+.int-nav svg { width: 20px; height: 20px; flex: none; fill: currentColor; opacity: 0.9; }
+.int-nav .name { font-weight: 600; font-size: 13px; }
+.int-nav .state { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.int-nav button.on .state { color: rgba(255, 255, 255, 0.75); }
+.int-nav .state::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25); vertical-align: 1px;
+}
+.int-nav button.live .state::before { background: #3fbf7f; }
+@media (max-width: 620px) { .int-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.int-panel { animation: fade-in var(--t-med) ease; }
+.int-panel > .hint { margin: 12px 0 4px; line-height: 1.5; }
+.group-title { margin: 18px 0 6px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.group { padding: 2px 14px; background: rgba(255, 255, 255, 0.035); border: 1px solid var(--line); border-radius: 12px; }
+.group > .fields, .group > div > .fields { padding: 12px 0 10px; margin: 0; }
+.group .group-status:not(:empty) { margin: -4px 0 10px; line-height: 1.45; }
+.group .own-app { margin: 0; }
+.group .own-app summary { padding: 11px 0; }
+.group .own-app[open] { padding-bottom: 10px; }
+.int-panel .legal { margin-top: 16px; font-size: 11.5px; line-height: 1.45; }
