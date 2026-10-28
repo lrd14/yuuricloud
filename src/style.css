@@ -662,3 +662,9 @@ tr.slsk-group.closed .caret { transform: rotate(-90deg); }
 .ob-summary li.on b::before { background: #3fbf7f; }
 .onboard-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }
 .onboard-foot .spacer { flex: 1; }
+
+/* Title bar: shown when a newer release is out */
+.update-pill { display: flex; align-items: center; gap: 2px; }
+.update-pill .btn.accent { padding: 6px 12px; font-size: 12.5px; animation: pop-in var(--t-slow) var(--ease); }
+.update-pill .icon-btn { width: 24px; height: 24px; }
+.update-pill svg.x { width: 9px; height: 9px; stroke: currentColor; stroke-width: 1.6; fill: none; }

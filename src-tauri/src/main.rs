@@ -850,6 +850,73 @@ async fn slsk_pick_exe(app: AppHandle) -> Result<Option<String>, String> {
     Ok(Some(picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned()))
 }
 
+// ---------------------------------------------------------------- updates
+
+const RELEASES_API: &str = "https://api.github.com/repos/lrd14/yuuricloud/releases/latest";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInfo {
+    current: String,
+    latest: String,
+    /// The release page, where the downloads are.
+    url: String,
+    newer: bool,
+}
+
+/// "0.10.2" > "0.9.9": compare version numbers part by part.
+fn version_parts(v: &str) -> Vec<u64> {
+    v.trim().trim_start_matches(['v', 'V']).split(['.', '-', '+']).map_while(|p| p.parse().ok()).collect()
+}
+
+fn is_newer(latest: &str, current: &str) -> bool {
+    let (a, b) = (version_parts(latest), version_parts(current));
+    !a.is_empty() && a > b
+}
+
+/// Ask GitHub for the newest published release. `pretend` (for testing) replaces this app's version.
+#[tauri::command]
+async fn check_update(app: AppHandle, pretend: Option<String>) -> Result<UpdateInfo, String> {
+    let current = pretend.unwrap_or_else(|| app.package_info().version.to_string());
+    blocking(move || {
+        let mut res = soundcloud::agent(20)
+            .get(RELEASES_API)
+            .header("User-Agent", "yuuricloud")
+            .header("Accept", "application/vnd.github+json")
+            .call()
+            .map_err(|e| format!("Couldn't reach GitHub: {e}"))?;
+        let status = res.status().as_u16();
+        if status == 404 {
+            return Err("No releases yet".into());
+        }
+        if status >= 400 {
+            return Err(format!("GitHub said {status}"));
+        }
+        let r: serde_json::Value = res.body_mut().read_json().map_err(|e| e.to_string())?;
+        let latest = r["tag_name"].as_str().unwrap_or("").trim_start_matches(['v', 'V']).to_string();
+        let url = r["html_url"].as_str().unwrap_or("https://github.com/lrd14/yuuricloud/releases/latest").to_string();
+        // only ever send people to this project's own GitHub page
+        let url = if url.starts_with("https://github.com/lrd14/yuuricloud/") { url } else { "https://github.com/lrd14/yuuricloud/releases/latest".into() };
+        Ok(UpdateInfo { newer: is_newer(&latest, &current), current, latest, url })
+    })
+    .await
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    #[test]
+    fn compares_versions_by_number() {
+        assert!(is_newer("0.2.0", "0.1.0"));
+        assert!(is_newer("v0.10.0", "0.9.9"));
+        assert!(is_newer("1.0.0", "0.99.0"));
+        assert!(!is_newer("0.1.0", "0.1.0"));
+        assert!(!is_newer("0.1.0", "0.2.0"));
+        assert!(!is_newer("", "0.1.0"));
+    }
+}
+
 #[tauri::command]
 async fn sc_waveform(url: String, bins: usize) -> Result<Vec<f32>, String> {
     blocking(move || soundcloud::waveform(&url, bins)).await
@@ -972,6 +1039,7 @@ fn main() {
             sc_prepare,
             sc_waveform,
             library_auto_folders,
+            check_update,
             tool_install,
             tool_cancel,
             slsk_set_config,

@@ -60,7 +60,7 @@ const DEFAULT_PREFS = {
   showCounts: true, onTop: false,
   animations: true, speed: "1", ambient: true, equalizer: true, hoverLift: true, waveform: true,
   waveHeight: 34, waveStyle: "bars", waveBars: 240, coverColors: true, coverTint: true,
-  appIcon: "yuuri", scView: "list", onboarded: false,
+  appIcon: "yuuri", scView: "list", onboarded: false, checkUpdates: true, skipVersion: "",
   ignoreThe: true, scanOnStart: true,
   singleClick: false, fade: true, rememberModes: false, shuffle: false, repeat: REPEAT_OFF, resume: true,
 };
@@ -179,6 +179,7 @@ async function load() {
   await refreshAutoFolders();
   const hasFolders = state.settings.folders.length || state.autoFolders.length;
   if (hasFolders && (prefs.scanOnStart || !state.tracks.length || needThumbs)) rescan(false);
+  if (prefs.checkUpdates) checkForUpdate();
   // first start: walk through setting things up
   if (!prefs.onboarded && !state.settings.folders.length && !state.tracks.length) openOnboarding();
 }
@@ -2955,3 +2956,60 @@ $("run-setup").addEventListener("click", () => {
   closeSettings();
   setTimeout(openOnboarding, 260 * Number(prefs.speed));
 });
+
+// ---------------------------------------------------------------- updates
+// Once at start and then twice a day, ask GitHub whether a newer release is out. If so, an Update
+// button appears in the title bar that opens the release page; the × skips that version.
+
+const update = { info: null, error: "", checking: false };
+
+async function checkForUpdate(manual = false) {
+  if (update.checking) return;
+  update.checking = true;
+  update.error = "";
+  renderUpdate();
+  try {
+    update.info = await invoke("check_update", { pretend: window.__pretendVersion || null });
+    const { newer, latest } = update.info;
+    if (newer && (manual || latest !== prefs.skipVersion)) {
+      if (manual && latest === prefs.skipVersion) setPref("skipVersion", ""); // asked by hand: show it again
+      setStatus(`yuuricloud ${latest} is out — click Update at the top to get it`, 8000);
+    } else if (manual) {
+      setStatus(newer ? "" : "You have the newest version", 4000);
+    }
+  } catch (e) {
+    update.error = String(e);
+    if (manual) setStatus(`Couldn't check for updates: ${e}`, 6000);
+  }
+  update.checking = false;
+  renderUpdate();
+}
+
+function renderUpdate() {
+  const info = update.info;
+  const show = !!info?.newer && info.latest !== prefs.skipVersion;
+  $("update-pill").hidden = !show;
+  if (show) {
+    $("update-open").textContent = `Update to ${info.latest}`;
+    $("update-open").title = `yuuricloud ${info.latest} is out (you have ${info.current}). Opens its download page.`;
+  }
+  const status = $("update-status");
+  status.className = "hint" + (show ? " ok" : update.error ? " err" : "");
+  status.textContent = update.checking ? "Checking…"
+    : update.error ? `Couldn't check: ${update.error}`
+    : !info ? "Not checked yet"
+    : info.newer ? `Version ${info.latest} is out — you have ${info.current}`
+    : `You have the newest version (${info.current})`;
+  $("update-check").disabled = update.checking;
+}
+
+$("update-open").addEventListener("click", () => update.info && window.__TAURI__.opener.openUrl(update.info.url));
+$("update-skip").addEventListener("click", () => {
+  if (!update.info) return;
+  setPref("skipVersion", update.info.latest);
+  renderUpdate();
+  setStatus(`Skipped ${update.info.latest}. Settings → Library → Check now brings it back.`, 5000);
+});
+$("update-check").addEventListener("click", () => checkForUpdate(true));
+setInterval(() => prefs.checkUpdates && checkForUpdate(), 12 * 60 * 60 * 1000);
+renderUpdate();

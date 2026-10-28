@@ -26,6 +26,12 @@
       <button id="add-folder" class="btn">Add folder</button>
       <button id="rescan" class="btn">Rescan</button>
       <button id="sc-refresh" class="btn" title="Reload your likes and playlists">Refresh</button>
+      <div id="update-pill" class="update-pill" hidden>
+        <button id="update-open" class="btn small accent" title="Open the download page for the new version">Update</button>
+        <button id="update-skip" class="icon-btn" title="Skip this version">
+          <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+        </button>
+      </div>
       <button id="downloads-btn" class="icon-btn dl-btn" title="Downloads">
         <svg viewBox="0 0 24 24"><use href="#i-download" /></svg>
         <span id="dl-badge" class="dl-badge" hidden></span>
@@ -334,6 +340,16 @@
             <div class="row">
               <div><div class="label">Remember shuffle and repeat</div></div>
               <label class="switch"><input type="checkbox" data-pref="rememberModes" /><span></span></label>
+            </div>
+            <div class="row">
+              <div>
+                <div class="label">Check for updates</div>
+                <div id="update-status" class="hint">yuuricloud</div>
+              </div>
+              <div class="actions">
+                <button id="update-check" class="btn">Check now</button>
+                <label class="switch" title="Check when yuuricloud starts"><input type="checkbox" data-pref="checkUpdates" /><span></span></label>
+              </div>
             </div>
             <div class="row">
               <div><div class="label">Setup guide</div><div class="hint">Walk through adding your music and connecting SoundCloud, Soulseek, Last.fm and Discord again.</div></div>
