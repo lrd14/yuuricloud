@@ -1,7 +1,14 @@
-# yuuricloud
+<h1><img src="src-tauri/icons/128x128.png" width="72" align="center" alt=""> yuuricloud</h1>
 
-A small local music player for Windows, macOS and Linux, built with [Tauri 2](https://tauri.app)
-(Rust backend, plain HTML/CSS/JS frontend).
+[![build](https://img.shields.io/github/actions/workflow/status/lrd14/yuuricloud/release.yml?label=build)](https://github.com/lrd14/yuuricloud/actions/workflows/release.yml)
+[![release](https://img.shields.io/github/v/release/lrd14/yuuricloud?label=release&color=0a7bbb)](https://github.com/lrd14/yuuricloud/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/lrd14/yuuricloud/total?label=downloads&color=44cc11)](https://github.com/lrd14/yuuricloud/releases)
+[![platforms](https://img.shields.io/badge/platforms-windows%20%7C%20macos%20%7C%20linux-9a9a9a)](https://github.com/lrd14/yuuricloud/releases/latest)
+[![built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db?logo=tauri&logoColor=white)](https://tauri.app)
+
+A small, fast music player for your local library and your SoundCloud, on Windows, macOS and Linux.
+
+Built with [Tauri 2](https://tauri.app) (Rust backend, plain HTML/CSS/JS frontend).
 
 ## Requirements
 
