@@ -568,3 +568,23 @@ body.show-downloads #slsk-empty { display: none !important; }
 .dl-bar.small { height: 4px; margin-top: 5px; }
 .dl-bar.small i { transition: width 400ms linear; }
 .dl-row.saved .sub { color: color-mix(in srgb, #3fbf7f 70%, var(--muted)); }
+
+/* Soulseek results: one header row per user and folder, like Soulseek itself */
+.slsk-sort { display: none; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+body.slsk .slsk-sort { display: flex; }
+.slsk-sort select {
+  background: rgba(255, 255, 255, 0.06); color: var(--text); border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px; padding: 4px 8px; font: inherit; font-size: 12.5px;
+}
+.slsk-sort select option { background: #1d2028; }
+tbody tr.slsk-group td { background: rgba(255, 255, 255, 0.045); border-top: 1px solid rgba(255, 255, 255, 0.06); }
+tbody tr.slsk-group:hover td { background: var(--hover); }
+tbody tr.slsk-group.sel td { background: var(--selected); }
+tbody tr.slsk-group b { font-weight: 650; }
+tbody tr.slsk-group .slot { margin: 0 10px 0 6px; font-size: 11.5px; color: var(--muted); }
+tbody tr.slsk-group .slot.free { color: color-mix(in srgb, #3fbf7f 80%, white); }
+tbody tr.slsk-group .folder { color: var(--text); opacity: .9; }
+tbody tr.slsk-group .stats { margin-left: 10px; font-size: 12px; color: var(--muted); }
+tbody tr.slsk-group td.num { cursor: pointer; }
+.caret { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; transition: transform var(--t-fast); vertical-align: middle; }
+tr.slsk-group.closed .caret { transform: rotate(-90deg); }

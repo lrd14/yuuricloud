@@ -35,7 +35,7 @@ const state = {
   scanning: false, rescanQueued: false,
   source: "local", // "local" library or "sc" (SoundCloud)
   // Soulseek through slskd: connection status, recent searches and slskd's download list
-  slsk: { status: null, searches: [], current: null, filter: "", transfers: [], connecting: false, error: "" },
+  slsk: { status: null, searches: [], current: null, filter: "", transfers: [], connecting: false, error: "", collapsed: new Set() },
   sc: {
     playlists: [],
     liked: new Set(),  // urns of liked tracks, known once Likes has loaded
@@ -344,7 +344,8 @@ const ROW_STEP = 16; // redraw only after scrolling this many rows
 const tableWrap = () => el.songBody.closest(".table-wrap");
 
 function songRowHtml(t, i, playing) {
-  const num = t.sc || t.slsk ? i + 1 : songTable.multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || "";
+  if (t.group) return slskGroupHtml(t, i);
+  const num = t.slsk ? t.num : t.sc ? i + 1 : songTable.multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || "";
   const isPlaying = t.path === playing;
   const cls = [isPlaying && "playing", i === state.selected && "sel", t.access === "blocked" && "unplayable", isFav(t) && "fav"].filter(Boolean).join(" ");
   const badge = t.access === "preview" ? '<span class="badge" title="SoundCloud only allows a 30-second preview">PREVIEW</span>'
@@ -457,8 +458,9 @@ function shuffled(arr) {
 
 function playShown(index) {
   if (index < 0 || index >= state.shown.length) return;
-  if (state.shown[index].slsk) {
-    slskDownload([state.shown[index]]); // not on this computer yet: double-click downloads
+  const pick = state.shown[index];
+  if (pick.group || pick.slsk) {
+    slskDownload(pick.group ? pick.all : [pick]); // not on this computer yet: double-click downloads
     return;
   }
   state.queue = [...state.shown];
@@ -864,6 +866,7 @@ el.search.addEventListener("input", () => {
 });
 el.search.addEventListener("keydown", (e) => {
   if (e.key !== "Enter" || !el.search.value.trim()) return;
+  if (state.source === "slsk") state.slsk.collapsed.clear();
   if (state.source === "sc") scSearch(el.search.value.trim());
   if (state.source === "slsk" && slskLoggedIn()) slskSearch(el.search.value.trim());
 });
@@ -907,6 +910,11 @@ el.albumGrid.addEventListener("dblclick", (e) => {
 el.songBody.addEventListener("click", (e) => {
   const row = e.target.closest("tr");
   if (!row) return;
+  const t = state.shown[row.dataset.i];
+  if (t?.group && e.target.closest("td.num")) {
+    slskToggleGroup(t.key); // the arrow folds the folder
+    return;
+  }
   selectRow(Number(row.dataset.i));
   if (prefs.singleClick) playShown(Number(row.dataset.i));
 });
@@ -1407,8 +1415,9 @@ function setSource(source) {
   state.source = source;
   document.body.classList.toggle("sc", source === "sc");
   document.body.classList.toggle("slsk", source === "slsk");
-  $("th-artist").textContent = source === "slsk" ? "User" : "Artist";
-  $("th-album").textContent = source === "slsk" ? "Folder" : "Album";
+  $("th-artist").textContent = source === "slsk" ? "Size" : "Artist";
+  $("th-album").textContent = source === "slsk" ? "Quality" : "Album";
+  $("slsk-sort").value = prefs.slskSort || "best";
   for (const b of $("source").children) b.classList.toggle("on", b.dataset.source === source);
   el.search.placeholder = source === "sc" ? "Filter, or press Enter to search SoundCloud"
     : source === "slsk" ? "Press Enter to search Soulseek, or type to filter" : "Search artists, albums, songs";
@@ -1745,7 +1754,8 @@ function onSongContextMenu(e) {
   const t = state.shown[i];
   if (!t) return;
   selectRow(i);
-  openMenu(e.clientX, e.clientY, `${t.title} · ${t.artist}`, t.slsk ? slskSongMenu(t) : songMenu(t, i));
+  const title = t.group ? `${t.username} · ${t.folder}` : t.slsk ? t.title : `${t.title} · ${t.artist}`;
+  openMenu(e.clientX, e.clientY, title, t.slsk || t.group ? slskSongMenu(t) : songMenu(t, i));
 }
 el.songBody.addEventListener("contextmenu", onSongContextMenu);
 el.songGrid.addEventListener("contextmenu", onSongContextMenu);
@@ -2239,23 +2249,89 @@ function slskQuality(f) {
   return f.bitRate && !["flac", "wav", "aiff", "aif", "alac", "ape", "wv"].includes(f.ext) ? `${ext} ${f.bitRate}` : ext;
 }
 
-/** Results as song-table rows: fastest, free users first. */
-function slskTracks(search) {
-  const q = state.slsk.filter;
-  return search.files
-    .map((f) => ({
+const LOSSLESS = ["flac", "wav", "aiff", "aif", "alac", "ape", "wv"];
+
+/** Quality in detail, for the Quality column: "FLAC · 24 bit / 96 kHz", "MP3 · 320 kbps". */
+function slskQualityLong(f) {
+  const ext = f.ext.toUpperCase();
+  if (f.bitDepth && f.sampleRate) return `${ext} · ${f.bitDepth} bit / ${Math.round(f.sampleRate / 100) / 10} kHz`;
+  if (f.bitRate && !LOSSLESS.includes(f.ext)) return `${ext} · ${f.bitRate} kbps${f.isVariableBitRate ? " VBR" : ""}`;
+  return ext;
+}
+
+/** A rough quality score for sorting: lossless first, then by bitrate. */
+const slskQualityScore = (f) => (LOSSLESS.includes(f.ext) ? 10000 + (f.bitDepth || 16) * 10 : f.bitRate || 0);
+
+const SLSK_SORTS = {
+  best: "Best sources", // free upload slot, then fastest, then shortest queue (like Soulseek's own order)
+  quality: "Best quality",
+  files: "Most files",
+  name: "Folder name",
+};
+
+/**
+ * Results grouped the way Soulseek shows them: one header row per user and folder, with that
+ * folder's files under it. Collapsed folders show only their header.
+ */
+function slskRows(search) {
+  const s = state.slsk, q = s.filter;
+  const groups = new Map();
+  for (const f of search.files) {
+    const dir = f.filename.slice(0, f.filename.length - baseName(f.filename).length);
+    const key = `${f.username}\0${dir}`;
+    let g = groups.get(key);
+    if (!g) {
+      const parts = dir.split(/[\\/]/).filter(Boolean);
+      groups.set(key, (g = {
+        group: true, key, path: `slsk-group:${key}`, username: f.username, dir,
+        folder: parts.slice(-2).join(" / ") || "(top level)",
+        freeSlot: f.freeSlot, queueLength: f.queueLength, uploadSpeed: f.uploadSpeed, all: [], files: [],
+      }));
+    }
+    const t = {
       slsk: f,
       path: `slsk:${f.username}:${f.filename}`,
       title: baseName(f.filename).replace(/\.[^.]+$/, ""),
-      artist: f.freeSlot ? f.username : `${f.username} · ${f.queueLength} waiting`,
-      albumArtist: f.username,
-      album: parentName(f.filename),
+      artist: fmtBytes(f.size),
+      album: slskQualityLong(f),
       duration: f.length || 0,
-      badge: slskQuality(f),
-      tip: `${f.filename}\n${f.username} · ${fmtBytes(f.size)} · ${f.freeSlot ? "free slot" : `${f.queueLength} in queue`} · ${fmtBytes(f.uploadSpeed)}/s`,
-    }))
-    .filter((t) => !q || [t.title, t.artist, t.album].some((s) => s.toLowerCase().includes(q)))
-    .sort((a, b) => (b.slsk.freeSlot - a.slsk.freeSlot) || (b.slsk.uploadSpeed - a.slsk.uploadSpeed));
+      tip: `${f.filename}\n${f.username} · ${fmtBytes(f.size)}`,
+    };
+    g.all.push(t);
+    if (!q || [t.title, g.folder, g.username].some((x) => x.toLowerCase().includes(q))) g.files.push(t);
+  }
+  const list = [...groups.values()].filter((g) => g.files.length);
+  for (const g of list) {
+    g.files.sort((x, y) => collator.compare(baseName(x.slsk.filename), baseName(y.slsk.filename)));
+    g.size = g.all.reduce((n, t) => n + t.slsk.size, 0);
+    g.quality = Math.max(...g.all.map((t) => slskQualityScore(t.slsk)));
+    g.formats = [...new Set(g.all.map((t) => t.slsk.ext.toUpperCase()))].join(", ");
+  }
+  const bySource = (x, y) => (y.freeSlot - x.freeSlot) || (y.uploadSpeed - x.uploadSpeed) || (x.queueLength - y.queueLength);
+  const sorts = {
+    best: bySource,
+    quality: (x, y) => (y.quality - x.quality) || bySource(x, y),
+    files: (x, y) => (y.all.length - x.all.length) || bySource(x, y),
+    name: (x, y) => collator.compare(x.folder, y.folder) || bySource(x, y),
+  };
+  list.sort(sorts[prefs.slskSort] || bySource);
+
+  const rows = [];
+  for (const g of list) {
+    rows.push(g);
+    if (!s.collapsed.has(g.key)) g.files.forEach((t, n) => rows.push(Object.assign(t, { num: n + 1, groupKey: g.key })));
+  }
+  return { rows, folders: list.length, files: list.reduce((n, g) => n + g.files.length, 0), users: new Set(list.map((g) => g.username)).size };
+}
+
+/** The header row of one user's folder. */
+function slskGroupHtml(g, i) {
+  const open = !state.slsk.collapsed.has(g.key);
+  const slot = g.freeSlot ? `<span class="slot free">free slot</span>` : `<span class="slot">${g.queueLength} waiting</span>`;
+  const stats = [`${g.all.length} file${g.all.length === 1 ? "" : "s"}`, fmtBytes(g.size), g.formats, `${fmtBytes(g.uploadSpeed)}/s`].join(" · ");
+  return `<tr data-i="${i}" class="slsk-group${i === state.selected ? " sel" : ""}${open ? "" : " closed"}" title="${esc(g.dir)}">` +
+    `<td class="num"><svg class="caret" viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg></td>` +
+    `<td colspan="4"><b>${esc(g.username)}</b> ${slot}<span class="folder">${esc(g.folder)}</span><span class="stats">${esc(stats)}</span></td></tr>`;
 }
 
 /** `keep` holds the scroll position and selection, for results that grow while searching. */
@@ -2264,11 +2340,14 @@ function renderSlskSongs(keep = false) {
   const s = state.slsk;
   const search = s.searches.find((x) => x.id === s.current);
   const wrap = tableWrap(), top = wrap.scrollTop, sel = state.shown[state.selected]?.path;
-  const tracks = search ? slskTracks(search) : [];
-  fillSongs(tracks, { title: search ? `“${search.text}”` : "Results" });
+  const { rows, folders, files, users } = search ? slskRows(search) : { rows: [] };
+  fillSongs(rows, { title: search ? `“${search.text}”` : "Results" });
+  if (search) {
+    el.songsTitle.textContent = `“${search.text}” · ${files} file${files === 1 ? "" : "s"} in ${folders} folder${folders === 1 ? "" : "s"} from ${users} user${users === 1 ? "" : "s"}`;
+  }
   if (keep) {
     wrap.scrollTop = top;
-    const i = sel ? tracks.findIndex((t) => t.path === sel) : -1;
+    const i = sel ? rows.findIndex((t) => t.path === sel) : -1;
     if (i >= 0) {
       state.selected = i;
       renderSongRows();
@@ -2276,10 +2355,30 @@ function renderSlskSongs(keep = false) {
   }
   const note = !search ? "Search for an artist, album or song."
     : search.error ? search.error
-    : !tracks.length ? (search.complete ? (s.filter ? "No matches." : "Nobody had that. Try fewer words.") : "Searching…") : "";
+    : !rows.length ? (search.complete ? (s.filter ? "No matches." : "Nobody had that. Try fewer words.") : "Searching…") : "";
   if (note) el.songBody.innerHTML = `<tr><td colspan="5" class="empty-note">${esc(note)}</td></tr>`;
   if (search && !search.complete) el.songsTitle.textContent += " · searching…";
 }
+
+function slskToggleGroup(key, open) {
+  const c = state.slsk.collapsed;
+  if (open ?? c.has(key)) c.delete(key);
+  else c.add(key);
+  renderSlskSongs(true);
+}
+
+function slskSetAllGroups(open) {
+  const search = state.slsk.searches.find((x) => x.id === state.slsk.current);
+  if (!search) return;
+  if (open) state.slsk.collapsed.clear();
+  else for (const f of search.files) state.slsk.collapsed.add(`${f.username}\0${f.filename.slice(0, f.filename.length - baseName(f.filename).length)}`);
+  renderSlskSongs(true);
+}
+
+$("slsk-sort").addEventListener("change", () => {
+  setPref("slskSort", $("slsk-sort").value);
+  renderSlskSongs();
+});
 
 async function slskSearch(text) {
   const s = state.slsk;
@@ -2345,15 +2444,26 @@ async function slskDownload(tracks) {
 }
 
 /** Every result in the same folder from the same user: usually the whole album. */
-const slskFolderOf = (t) => state.shown.filter((x) => x.slsk && x.slsk.username === t.slsk.username &&
-  x.slsk.filename.slice(0, x.slsk.filename.length - baseName(x.slsk.filename).length) ===
-  t.slsk.filename.slice(0, t.slsk.filename.length - baseName(t.slsk.filename).length));
+/** The folder header a file row sits under. */
+const slskGroupOf = (t) => state.shown.find((x) => x.group && x.key === t.groupKey);
 
 function slskSongMenu(t) {
-  const folder = slskFolderOf(t);
+  if (t.group) {
+    const open = !state.slsk.collapsed.has(t.key);
+    return [
+      { label: `Download folder (${t.all.length} file${t.all.length === 1 ? "" : "s"})`, icon: "i-download", action: () => slskDownload(t.all) },
+      { label: open ? "Collapse" : "Expand", icon: "i-list", action: () => slskToggleGroup(t.key) },
+      "-",
+      { label: "Collapse all", icon: "i-list", action: () => slskSetAllGroups(false) },
+      { label: "Expand all", icon: "i-list", action: () => slskSetAllGroups(true) },
+      "-",
+      { label: "Copy folder name", icon: "i-link", action: () => copyText(t.folder.split(" / ").pop(), "Folder name copied") },
+    ];
+  }
+  const g = slskGroupOf(t);
   return [
     { label: "Download", icon: "i-download", action: () => slskDownload([t]) },
-    { label: `Download whole folder (${folder.length})`, icon: "i-download", disabled: folder.length < 2, action: () => slskDownload(folder) },
+    { label: `Download whole folder (${g?.all.length ?? 1})`, icon: "i-download", disabled: !g || g.all.length < 2, action: () => slskDownload(g.all) },
     "-",
     { label: "Copy file name", icon: "i-link", action: () => copyText(baseName(t.slsk.filename), "File name copied") },
   ];
