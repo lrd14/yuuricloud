@@ -432,6 +432,12 @@ impl Conn {
         path.exists().then_some(path)
     }
 
+    /// Ask the user we're downloading from where we are in their upload queue.
+    pub fn queue_position(&self, username: &str, id: &str) -> Result<Option<u64>, String> {
+        let t = self.get(&format!("/api/v0/transfers/downloads/{}/{}/position", url_part(username), url_part(id)))?;
+        Ok(t["placeInQueue"].as_u64().or_else(|| t.as_u64()))
+    }
+
     /// Cancel a download; `remove` also takes it off the list.
     pub fn cancel(&self, username: &str, id: &str, remove: bool) -> Result<(), String> {
         self.request("DELETE", &format!("/api/v0/transfers/downloads/{}/{}?remove={remove}", url_part(username), url_part(id)), None)

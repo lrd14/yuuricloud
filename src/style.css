@@ -588,3 +588,4 @@ tbody tr.slsk-group .stats { margin-left: 10px; font-size: 12px; color: var(--mu
 tbody tr.slsk-group td.num { cursor: pointer; }
 .caret { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; transition: transform var(--t-fast); vertical-align: middle; }
 tr.slsk-group.closed .caret { transform: rotate(-90deg); }
+.dl-note { margin: -2px 0 8px; }

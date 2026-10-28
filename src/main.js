@@ -991,7 +991,13 @@ document.addEventListener("keydown", (e) => {
 
 $("win-min").addEventListener("click", () => appWindow.minimize());
 $("win-max").addEventListener("click", () => appWindow.toggleMaximize());
+let closeArmed = 0;
 $("win-close").addEventListener("click", () => {
+  if (slskActive() && Date.now() - closeArmed > 5000) {
+    closeArmed = Date.now();
+    setStatus(`${slskActive()} Soulseek download${slskActive() === 1 ? " is" : "s are"} still going — closing stops ${slskActive() === 1 ? "it" : "them"}. Click close again to quit.`, 5000);
+    return;
+  }
   saveSession();
   invoke("discord_update", { track: null, playing: false, position: 0 }).finally(() => appWindow.close());
 });
@@ -2517,15 +2523,40 @@ function slskTransferText(x) {
     const pct = x.size ? Math.floor((x.bytes / x.size) * 100) : 0;
     return `${pct}% · ${fmtBytes(x.bytes)} of ${fmtBytes(x.size)}${x.speed ? ` · ${fmtBytes(x.speed)}/s` : ""}`;
   }
-  if (st.includes("Remotely")) return `Waiting in ${x.username}'s queue${x.placeInQueue ? ` (#${x.placeInQueue})` : ""}`;
+  if (st.includes("Remotely")) {
+    const place = slskPlaces.get(x.id) ?? x.placeInQueue;
+    return place ? `In their queue — ${ordinal(place)} in line` : "In their queue — waiting for them to start sending";
+  }
   if (st.includes("Queued")) return "Waiting";
   return "Starting…";
+}
+
+const ordinal = (n) => n + ([, "st", "nd", "rd"][(n % 100 >> 3) ^ 1 && n % 10] || "th");
+
+// where we are in each uploader's queue: id -> place, asked at most every 30 s per file
+const slskPlaces = new Map(), slskPlaceAsked = new Map();
+function askSlskPlaces() {
+  const now = Date.now();
+  for (const x of state.slsk.transfers) {
+    if (!x.state.includes("Remotely") || now - (slskPlaceAsked.get(x.id) || 0) < 30000) continue;
+    slskPlaceAsked.set(x.id, now);
+    invoke("slsk_queue_position", { username: x.username, id: x.id })
+      .then((place) => {
+        if (place == null) return;
+        slskPlaces.set(x.id, place);
+        if (!$("downloads").hidden) renderSlskTransfers();
+      })
+      .catch(() => {});
+  }
 }
 
 function renderSlskTransfers() {
   const list = state.slsk.transfers;
   $("dl-slsk-title").hidden = !list.length;
   $("dl-slsk-title").textContent = `Soulseek · ${list.length}`;
+  // Soulseek users send to a few people at a time, so "queued" is normal and can last a while
+  $("dl-slsk-note").hidden = !list.some((x) => x.state.includes("Remotely"));
+  if (!$("downloads").hidden) askSlskPlaces();
   $("dl-slsk").innerHTML = list.slice(0, 300).map((x) => {
     const failed = slskDone(x) && !slskOk(x);
     const cls = slskOk(x) ? "saved" : failed ? "failed" : "";
