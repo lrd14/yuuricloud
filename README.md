@@ -8,6 +8,8 @@
 
 A small, fast music player for your local library and your SoundCloud, on Windows, macOS and Linux.
 
+<p align="center"><img src="docs/preview.png" alt="yuuricloud showing a music library with album covers, and the Downloads page" width="900"></p>
+
 Built with [Tauri 2](https://tauri.app) (Rust backend, plain HTML/CSS/JS frontend).
 
 ## Requirements
