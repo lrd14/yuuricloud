@@ -66,6 +66,8 @@ pub struct Conn {
     pid_file: Option<PathBuf>,
     /// Where finished downloads land, when known.
     pub downloads_dir: Option<PathBuf>,
+    /// The port other Soulseek users connect to (managed mode).
+    listen_port: Option<u16>,
 }
 
 impl Drop for Conn {
@@ -218,6 +220,7 @@ flags:
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let child = cmd.spawn().map_err(|e| format!("Couldn't start slskd: {e}"))?;
+    stop_with_us(&child);
     let _ = std::fs::write(&pid_file, child.id().to_string());
 
     let mut conn = Conn {
@@ -226,6 +229,7 @@ flags:
         child: Some(child),
         pid_file: Some(pid_file),
         downloads_dir: Some(launch.downloads.to_path_buf()),
+        listen_port: Some(listen),
     };
     let started = Instant::now();
     loop {
@@ -242,6 +246,44 @@ flags:
         std::thread::sleep(Duration::from_millis(400));
     }
 }
+
+/// Make sure slskd stops when yuuricloud does, even if yuuricloud crashes or is ended from Task
+/// Manager: Windows closes our "kill on close" job when this process goes away, and every
+/// process in the job goes with it. (Elsewhere the normal shutdown and the stale-pid check cover it.)
+#[cfg(windows)]
+fn stop_with_us(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    // the job handle is deliberately never closed: it closes when this process exits
+    static JOB: OnceLock<usize> = OnceLock::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return 0;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const std::ffi::c_void,
+            std::mem::size_of_val(&info) as u32,
+        );
+        job as usize
+    });
+    if job != 0 {
+        unsafe {
+            AssignProcessToJobObject(job as _, child.as_raw_handle() as _);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn stop_with_us(_: &Child) {}
 
 /// The config holds the Soulseek password, so keep it readable by this user only where possible.
 fn write_private(path: &Path, text: &str) -> Result<(), String> {
@@ -269,7 +311,7 @@ pub fn connect_external(cfg: &SlskConfig) -> Result<Conn, String> {
     if !base.starts_with("http://") && !base.starts_with("https://") {
         return Err("The slskd address should start with http:// or https://".into());
     }
-    let mut conn = Conn { base, key: cfg.api_key.trim().to_string(), child: None, pid_file: None, downloads_dir: None };
+    let mut conn = Conn { base, key: cfg.api_key.trim().to_string(), child: None, pid_file: None, downloads_dir: None, listen_port: None };
     conn.get("/api/v0/application")?;
     // ask slskd where it saves downloads, so finished files can be shown in their folder
     conn.downloads_dir = conn
@@ -331,6 +373,7 @@ impl Conn {
             "busy": s["isConnecting"].as_bool().unwrap_or(false) || s["isLoggingIn"].as_bool().unwrap_or(false) || s["isTransitioning"].as_bool().unwrap_or(false),
             "state": s["state"],
             "username": s["username"],
+            "listenPort": self.listen_port,
         }))
     }
 
@@ -559,11 +602,24 @@ mod tests {
         assert!(conn.transfers().unwrap().is_empty());
         assert!(conn.search("test").unwrap_err().contains("logged in"));
         // without the key, slskd turns requests away
-        let open = Conn { base: conn.base.clone(), key: "wrong".into(), child: None, pid_file: None, downloads_dir: None };
+        let open = Conn { base: conn.base.clone(), key: "wrong".into(), child: None, pid_file: None, downloads_dir: None, listen_port: None };
         assert!(open.status().unwrap_err().contains("API key"));
         drop(open);
         drop(conn);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Leaves slskd running without shutting it down; afterwards no slskd from YUURI_TEST_SLSKD
+    /// should be left, because the job object ends it with this test process.
+    #[test]
+    #[ignore]
+    fn managed_slskd_dies_with_us() {
+        let exe = PathBuf::from(std::env::var("YUURI_TEST_SLSKD").expect("set YUURI_TEST_SLSKD"));
+        std::env::set_var("SLSKD_NO_CONNECT", "true");
+        let base = std::env::temp_dir().join(format!("yuuricloud-slskd-orphan-{}", std::process::id()));
+        let cfg = SlskConfig { username: "nobody".into(), password: "x".into(), ..Default::default() };
+        let conn = start_managed(&cfg, Launch { exe: &exe, app_dir: &base.join("app"), downloads: &base.join("down"), shares: &[] }).unwrap();
+        std::mem::forget(conn); // no clean shutdown
     }
 
     #[test]

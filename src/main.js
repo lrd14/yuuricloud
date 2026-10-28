@@ -2217,7 +2217,10 @@ function slskStatusText() {
   const s = state.slsk, st = s.status;
   if (s.connecting) return "Starting slskd…";
   if (!st) return s.error || "Not connected";
-  if (st.loggedIn) return `Connected as ${st.username || state.settings.soulseek?.username}`;
+  if (st.loggedIn) {
+    const port = st.listenPort ? ` · listening on port ${st.listenPort}` : "";
+    return `Connected as ${st.username || state.settings.soulseek?.username}${port}`;
+  }
   if (st.busy) return "Logging in to Soulseek…";
   return `slskd is running but not logged in (${st.state || "disconnected"}). Check the username and password.`;
 }
