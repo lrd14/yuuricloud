@@ -710,7 +710,10 @@ audio.addEventListener("timeupdate", () => {
 audio.addEventListener("error", () => {
   if (!audio.getAttribute("src")) return; // cleared while a SoundCloud song downloads
   const t = current();
-  setStatus(`Can't play “${t?.title ?? "file"}” — format not supported here`, 6000);
+  // a song the scan couldn't read any length from is almost always an empty or cut-off file,
+  // such as a download that never finished
+  const why = t && !t.sc && !t.duration ? "the file is empty or damaged (maybe a download that didn't finish)" : "format not supported here";
+  setStatus(`Can't play “${t?.title ?? "file"}” — ${why}`, 7000);
   if (state.pos + 1 < state.order.length) setTimeout(() => next(true), 400);
 });
 

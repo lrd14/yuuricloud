@@ -972,8 +972,9 @@ fn main() {
             let tracks: Vec<Track> = library::load_json(&data_dir.join("library.json")).unwrap_or_default();
 
             let handle = app.handle();
-            for folder in &settings.folders {
-                allow_dir(handle, Path::new(folder));
+            // the download folders too: their songs must play before the first scan has run
+            for folder in library_roots(handle, &settings) {
+                allow_dir(handle, Path::new(&folder));
             }
             allow_dir(handle, &data_dir.join("covers"));
             let _ = std::fs::create_dir_all(data_dir.join("soundcloud-cache"));
