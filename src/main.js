@@ -2054,6 +2054,7 @@ $("dl-clear").addEventListener("click", async () => {
   pollSlskTransfers();
 });
 $("dl-open-folder").addEventListener("click", () => invoke("dl_open_folder").catch((e) => setStatus(String(e), 5000)));
+$("dl-open-slsk").addEventListener("click", () => invoke("slsk_open_folder").catch((e) => setStatus(String(e), 5000)));
 
 function renderDownloads() {
   const scActive = dl.queue.length + (dl.current ? 1 : 0);
