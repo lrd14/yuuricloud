@@ -69,6 +69,7 @@ pub struct Settings {
     /// Paths of songs marked as favourites.
     pub favorites: Vec<String>,
     pub downloads: crate::downloads::DownloadConfig,
+    pub soulseek: crate::slsk::SlskConfig,
 }
 
 impl Default for Settings {
@@ -84,6 +85,7 @@ impl Default for Settings {
             soundcloud: Default::default(),
             favorites: Vec::new(),
             downloads: Default::default(),
+            soulseek: Default::default(),
         }
     }
 }

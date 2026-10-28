@@ -34,6 +34,8 @@ const state = {
   shuffle: false, repeat: REPEAT_OFF,
   scanning: false, rescanQueued: false,
   source: "local", // "local" library or "sc" (SoundCloud)
+  // Soulseek through slskd: connection status, recent searches and slskd's download list
+  slsk: { status: null, searches: [], current: null, filter: "", transfers: [], connecting: false, error: "" },
   sc: {
     playlists: [],
     liked: new Set(),  // urns of liked tracks, known once Likes has loaded
@@ -169,6 +171,7 @@ async function load() {
   applySearch();
   if (prefs.resume) restoreSession();
   sessionReady = true;
+  if (state.settings.soulseek?.autoConnect && slskConfigured()) slskConnect();
   discordSync();
   // libraries scanned before grid thumbnails existed get them on this scan
   const needThumbs = state.tracks.some((t) => t.cover && !t.thumb);
@@ -341,11 +344,12 @@ const ROW_STEP = 16; // redraw only after scrolling this many rows
 const tableWrap = () => el.songBody.closest(".table-wrap");
 
 function songRowHtml(t, i, playing) {
-  const num = t.sc ? i + 1 : songTable.multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || "";
+  const num = t.sc || t.slsk ? i + 1 : songTable.multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || "";
   const isPlaying = t.path === playing;
   const cls = [isPlaying && "playing", i === state.selected && "sel", t.access === "blocked" && "unplayable", isFav(t) && "fav"].filter(Boolean).join(" ");
-  const badge = t.access === "preview" ? '<span class="badge" title="SoundCloud only allows a 30-second preview">PREVIEW</span>' : "";
-  return `<tr data-i="${i}" data-num="${num}"${cls ? ` class="${cls}"` : ""} title="${esc(t.sc ? t.permalinkUrl : t.path)}"${i < 40 ? ` style="--i:${i}"` : ""}>` +
+  const badge = t.access === "preview" ? '<span class="badge" title="SoundCloud only allows a 30-second preview">PREVIEW</span>'
+    : t.badge ? `<span class="badge">${esc(t.badge)}</span>` : "";
+  return `<tr data-i="${i}" data-num="${num}"${cls ? ` class="${cls}"` : ""} title="${esc(t.tip || (t.sc ? t.permalinkUrl : t.path))}"${i < 40 ? ` style="--i:${i}"` : ""}>` +
     `<td class="num">${isPlaying && prefs.equalizer ? EQ_HTML : num}</td><td>${esc(t.title)}<svg class="heart"><use href="#i-heart" /></svg>${badge}</td><td>${esc(t.artist)}</td>` +
     `<td class="col-album">${esc(t.album)}</td><td class="time">${fmtTime(t.duration)}</td></tr>`;
 }
@@ -453,6 +457,10 @@ function shuffled(arr) {
 
 function playShown(index) {
   if (index < 0 || index >= state.shown.length) return;
+  if (state.shown[index].slsk) {
+    slskDownload([state.shown[index]]); // not on this computer yet: double-click downloads
+    return;
+  }
   state.queue = [...state.shown];
   state.order = state.queue.map((_, i) => i);
   if (state.shuffle) {
@@ -845,13 +853,19 @@ el.search.addEventListener("input", () => {
       renderScSongs();
       return;
     }
+    if (state.source === "slsk") {
+      state.slsk.filter = el.search.value.trim().toLowerCase();
+      renderSlskSongs();
+      return;
+    }
     state.query = el.search.value.trim().toLowerCase();
     applySearch();
   }, 120);
 });
 el.search.addEventListener("keydown", (e) => {
-  if (e.key !== "Enter" || state.source !== "sc" || !el.search.value.trim()) return;
-  scSearch(el.search.value.trim());
+  if (e.key !== "Enter" || !el.search.value.trim()) return;
+  if (state.source === "sc") scSearch(el.search.value.trim());
+  if (state.source === "slsk" && slskLoggedIn()) slskSearch(el.search.value.trim());
 });
 
 el.artistList.addEventListener("click", (e) => {
@@ -861,12 +875,16 @@ el.artistList.addEventListener("click", (e) => {
     if (li.dataset.key) scSelect(li.dataset.key);
     return;
   }
+  if (state.source === "slsk") {
+    if (li.dataset.key) slskSelect(li.dataset.key);
+    return;
+  }
   state.artist = li.dataset.key || null;
   state.album = null;
   for (const x of el.artistList.children) x.classList.toggle("sel", x === li);
   renderAlbums();
 });
-el.artistList.addEventListener("dblclick", (e) => e.target.closest("li") && playShown(0));
+el.artistList.addEventListener("dblclick", (e) => e.target.closest("li") && state.source !== "slsk" && playShown(0));
 
 el.albumGrid.addEventListener("click", (e) => {
   const card = e.target.closest(".album");
@@ -1019,7 +1037,7 @@ function restoreSession() {
 
   state.sc.current = s.scList || "likes";
   state.sc.searchQuery = s.scSearch || "";
-  if (s.source === "sc") setSource("sc");
+  if (s.source === "sc" || s.source === "slsk") setSource(s.source);
 
   const byPath = new Map(state.tracks.map((t) => [t.path, t]));
   const queue = (s.queue || []).map((p) => (typeof p === "string" ? byPath.get(p) : p?.sc && scConnected() ? p : undefined));
@@ -1111,6 +1129,7 @@ function renderIntegrations() {
   $("discord-enabled").checked = !!dc.enabled;
   renderScSettings();
   renderDownloadSettings();
+  renderSlskSettings();
 }
 
 function fillIntegrationFields() {
@@ -1387,16 +1406,24 @@ const scConnected = () => !!state.settings.soundcloud?.accessToken;
 function setSource(source) {
   state.source = source;
   document.body.classList.toggle("sc", source === "sc");
+  document.body.classList.toggle("slsk", source === "slsk");
+  $("th-artist").textContent = source === "slsk" ? "User" : "Artist";
+  $("th-album").textContent = source === "slsk" ? "Folder" : "Album";
   for (const b of $("source").children) b.classList.toggle("on", b.dataset.source === source);
-  el.search.placeholder = source === "sc" ? "Filter, or press Enter to search SoundCloud" : "Search artists, albums, songs";
+  el.search.placeholder = source === "sc" ? "Filter, or press Enter to search SoundCloud"
+    : source === "slsk" ? "Press Enter to search Soulseek, or type to filter" : "Search artists, albums, songs";
   el.search.value = "";
   state.query = "";
   state.sc.filter = "";
+  state.slsk.filter = "";
+  if (source !== "sc") $("sc-empty").hidden = true;
+  if (source !== "slsk") $("slsk-empty").hidden = true;
   if (source === "sc") {
     renderSc();
     if (scConnected() && !state.sc.loaded) scLoad();
+  } else if (source === "slsk") {
+    renderSlsk();
   } else {
-    $("sc-empty").hidden = true;
     applySearch();
   }
   saveSession();
@@ -1718,7 +1745,7 @@ function onSongContextMenu(e) {
   const t = state.shown[i];
   if (!t) return;
   selectRow(i);
-  openMenu(e.clientX, e.clientY, `${t.title} · ${t.artist}`, songMenu(t, i));
+  openMenu(e.clientX, e.clientY, `${t.title} · ${t.artist}`, t.slsk ? slskSongMenu(t) : songMenu(t, i));
 }
 el.songBody.addEventListener("contextmenu", onSongContextMenu);
 el.songGrid.addEventListener("contextmenu", onSongContextMenu);
@@ -1994,33 +2021,43 @@ function showDownloads(open = true) {
   closeSettings();
   document.body.classList.toggle("show-downloads", open);
   $("downloads").hidden = !open;
-  if (open) renderDownloads();
+  if (open) {
+    renderDownloads();
+    pollSlskTransfers();
+  }
 }
 
 $("downloads-btn").addEventListener("click", () => showDownloads(!document.body.classList.contains("show-downloads")));
 $("dl-close").addEventListener("click", () => showDownloads(false));
 $("source").addEventListener("click", () => showDownloads(false), true);
 $("dl-pause").addEventListener("click", () => (dl.paused ? resumeDownloads() : stopDownloads()));
-$("dl-clear").addEventListener("click", () => {
+$("dl-clear").addEventListener("click", async () => {
   dl.finished = [];
+  if (state.slsk.status) await invoke("slsk_clear_finished").catch(() => {});
   renderDownloads();
+  pollSlskTransfers();
 });
 $("dl-open-folder").addEventListener("click", () => invoke("dl_open_folder").catch((e) => setStatus(String(e), 5000)));
 
 function renderDownloads() {
-  const active = dl.queue.length + (dl.current ? 1 : 0);
+  const scActive = dl.queue.length + (dl.current ? 1 : 0);
+  const slskBusy = slskActive();
+  const active = scActive + slskBusy;
   const badge = $("dl-badge");
   badge.hidden = !active;
   badge.textContent = active > 99 ? "99+" : active;
-  $("downloads-btn").classList.toggle("busy", !!dl.current);
+  $("downloads-btn").classList.toggle("busy", !!dl.current || state.slsk.transfers.some((x) => x.state.includes("InProgress")));
   if ($("downloads").hidden) return;
 
-  const failed = dl.finished.filter((it) => it.status === "failed").length;
-  $("dl-summary").textContent = !active && !dl.finished.length ? "Nothing downloading. Right-click a SoundCloud song or list to download it."
+  const slskFinished = state.slsk.transfers.filter(slskDone);
+  const failed = dl.finished.filter((it) => it.status === "failed").length + slskFinished.filter((x) => !slskOk(x)).length;
+  $("dl-summary").textContent = !active && !dl.finished.length && !slskFinished.length
+    ? "Nothing downloading. Right-click a SoundCloud song or list, or a Soulseek result, to download it."
     : [active && `${active} to go`, dl.paused && "paused", failed && `${failed} failed`].filter(Boolean).join(" · ") || "All done";
   $("dl-pause").textContent = dl.paused ? "Resume" : "Pause";
-  $("dl-pause").hidden = !active;
-  $("dl-clear").hidden = !dl.finished.length;
+  $("dl-pause").hidden = !scActive;
+  $("dl-clear").hidden = !dl.finished.length && !slskFinished.length;
+  renderSlskTransfers();
 
   const it = dl.current;
   $("dl-current").innerHTML = it
@@ -2092,3 +2129,432 @@ renderDownloads();
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && el.settings.hidden && document.body.classList.contains("show-downloads")) showDownloads(false);
 });
+
+// ----------------------------------------------------------------- Soulseek
+// Searching and downloading go through slskd (see slsk.rs). Results show in the song table;
+// double-click or Enter downloads instead of playing, since nothing is on this computer yet.
+
+const SLSK_MAX_SEARCHES = 12;
+
+// Function declarations, not consts: renderDownloads (earlier in the file) runs while the file
+// is still loading and already needs some of these.
+function slskLoggedIn() {
+  return !!state.slsk.status?.loggedIn;
+}
+function slskConfigured() {
+  const c = state.settings.soulseek || {};
+  return c.external ? !!c.url : !!(c.username && c.password);
+}
+function baseName(p) {
+  return p.split(/[\\/]/).filter(Boolean).pop() || p;
+}
+function parentName(p) {
+  return p.split(/[\\/]/).filter(Boolean).slice(-2, -1)[0] || "";
+}
+
+async function slskConnect() {
+  const s = state.slsk;
+  if (s.connecting) return;
+  s.connecting = true;
+  s.error = "";
+  renderSlskSettings();
+  if (state.source === "slsk") renderSlsk();
+  try {
+    s.status = await invoke("slsk_connect");
+    pollSlskStatus();
+    pollSlskTransfers();
+  } catch (e) {
+    s.status = null;
+    s.error = String(e);
+  }
+  s.connecting = false;
+  renderSlskSettings();
+  if (state.source === "slsk") renderSlsk();
+}
+
+async function slskDisconnect() {
+  await invoke("slsk_disconnect").catch(() => {});
+  Object.assign(state.slsk, { status: null, transfers: [] });
+  renderSlskSettings();
+  renderDownloads();
+  if (state.source === "slsk") renderSlsk();
+}
+
+// slskd needs a few seconds to log in after it starts, and can drop and regain the connection
+let slskStatusTimer;
+async function pollSlskStatus() {
+  clearTimeout(slskStatusTimer);
+  const s = state.slsk;
+  try {
+    s.status = await invoke("slsk_status");
+  } catch (e) {
+    s.status = null;
+    s.error = String(e);
+  }
+  const wasIn = slskLoggedIn();
+  renderSlskSettings();
+  if (state.source === "slsk") renderSlsk();
+  if (s.status) slskStatusTimer = setTimeout(pollSlskStatus, wasIn ? 10000 : 1500);
+}
+
+function slskStatusText() {
+  const s = state.slsk, st = s.status;
+  if (s.connecting) return "Starting slskd…";
+  if (!st) return s.error || "Not connected";
+  if (st.loggedIn) return `Connected as ${st.username || state.settings.soulseek?.username}`;
+  if (st.busy) return "Logging in to Soulseek…";
+  return `slskd is running but not logged in (${st.state || "disconnected"}). Check the username and password.`;
+}
+
+// ------------------------------------------------------------ the view
+
+function renderSlsk() {
+  const s = state.slsk;
+  const ready = slskLoggedIn();
+  el.empty.hidden = true;
+  $("slsk-empty").hidden = ready;
+  el.library.hidden = !ready;
+  if (!ready) {
+    $("slsk-empty-text").textContent = s.connecting ? "Starting Soulseek…"
+      : s.status ? slskStatusText()
+      : slskConfigured() ? (s.error || "Soulseek isn't connected.")
+      : "Search and download music from Soulseek. Set up your Soulseek login first.";
+    $("slsk-empty-connect").hidden = !slskConfigured() || s.connecting || !!s.status;
+    return;
+  }
+  if (!s.searches.some((x) => x.id === s.current)) s.current = s.searches[0]?.id ?? null;
+  let n = 0;
+  el.artistList.innerHTML = s.searches.length
+    ? s.searches.map((x) =>
+        `<li data-key="${esc(x.id)}" class="${x.id === s.current ? "sel" : ""}" title="${esc(x.text)}" style="--i:${n++}">` +
+        `<span class="count">${x.complete ? x.files.length : "…"}</span>${esc(x.text)}</li>`).join("")
+    : `<li class="none">Type in the search box and press Enter</li>`;
+  el.artistsTitle.textContent = `Soulseek · ${s.status.username || ""}`;
+  renderSlskSongs();
+}
+
+function slskQuality(f) {
+  const ext = f.ext.toUpperCase();
+  if (f.bitDepth && f.sampleRate) return `${ext} ${f.bitDepth}/${Math.round(f.sampleRate / 100) / 10}`;
+  return f.bitRate && !["flac", "wav", "aiff", "aif", "alac", "ape", "wv"].includes(f.ext) ? `${ext} ${f.bitRate}` : ext;
+}
+
+/** Results as song-table rows: fastest, free users first. */
+function slskTracks(search) {
+  const q = state.slsk.filter;
+  return search.files
+    .map((f) => ({
+      slsk: f,
+      path: `slsk:${f.username}:${f.filename}`,
+      title: baseName(f.filename).replace(/\.[^.]+$/, ""),
+      artist: f.freeSlot ? f.username : `${f.username} · ${f.queueLength} waiting`,
+      albumArtist: f.username,
+      album: parentName(f.filename),
+      duration: f.length || 0,
+      badge: slskQuality(f),
+      tip: `${f.filename}\n${f.username} · ${fmtBytes(f.size)} · ${f.freeSlot ? "free slot" : `${f.queueLength} in queue`} · ${fmtBytes(f.uploadSpeed)}/s`,
+    }))
+    .filter((t) => !q || [t.title, t.artist, t.album].some((s) => s.toLowerCase().includes(q)))
+    .sort((a, b) => (b.slsk.freeSlot - a.slsk.freeSlot) || (b.slsk.uploadSpeed - a.slsk.uploadSpeed));
+}
+
+/** `keep` holds the scroll position and selection, for results that grow while searching. */
+function renderSlskSongs(keep = false) {
+  if (state.source !== "slsk") return;
+  const s = state.slsk;
+  const search = s.searches.find((x) => x.id === s.current);
+  const wrap = tableWrap(), top = wrap.scrollTop, sel = state.shown[state.selected]?.path;
+  const tracks = search ? slskTracks(search) : [];
+  fillSongs(tracks, { title: search ? `“${search.text}”` : "Results" });
+  if (keep) {
+    wrap.scrollTop = top;
+    const i = sel ? tracks.findIndex((t) => t.path === sel) : -1;
+    if (i >= 0) {
+      state.selected = i;
+      renderSongRows();
+    }
+  }
+  const note = !search ? "Search for an artist, album or song."
+    : search.error ? search.error
+    : !tracks.length ? (search.complete ? (s.filter ? "No matches." : "Nobody had that. Try fewer words.") : "Searching…") : "";
+  if (note) el.songBody.innerHTML = `<tr><td colspan="5" class="empty-note">${esc(note)}</td></tr>`;
+  if (search && !search.complete) el.songsTitle.textContent += " · searching…";
+}
+
+async function slskSearch(text) {
+  const s = state.slsk;
+  let id;
+  try {
+    id = await invoke("slsk_search", { text });
+  } catch (e) {
+    setStatus(String(e), 6000);
+    return;
+  }
+  s.searches.unshift({ id, text, files: [], complete: false });
+  s.searches.length = Math.min(s.searches.length, SLSK_MAX_SEARCHES);
+  s.current = id;
+  s.filter = "";
+  el.search.value = "";
+  renderSlsk();
+  for (let i = 0; i < 120; i++) { // slskd ends a search after 15 s; stop asking after 2 min whatever happens
+    await new Promise((r) => setTimeout(r, 1000));
+    const search = s.searches.find((x) => x.id === id);
+    if (!search) return; // removed
+    try {
+      const r = await invoke("slsk_search_results", { id });
+      Object.assign(search, { files: r.files, complete: r.complete });
+    } catch (e) {
+      Object.assign(search, { complete: true, error: String(e) });
+    }
+    if (state.source === "slsk") {
+      const li = el.artistList.querySelector(`li[data-key="${id}"] .count`);
+      if (li) li.textContent = search.complete ? search.files.length : "…";
+      if (s.current === id) renderSlskSongs(true);
+    }
+    if (search.complete) return;
+  }
+}
+
+function slskSelect(id) {
+  state.slsk.current = id;
+  for (const x of el.artistList.children) x.classList.toggle("sel", x.dataset.key === id);
+  renderSlskSongs();
+}
+
+function slskRemoveSearch(id) {
+  const s = state.slsk;
+  s.searches = s.searches.filter((x) => x.id !== id);
+  invoke("slsk_search_stop", { id }).catch(() => {});
+  renderSlsk();
+}
+
+/** Queue result rows for download, grouped by the user who has them. */
+async function slskDownload(tracks) {
+  const byUser = new Map();
+  for (const t of tracks) {
+    if (!byUser.has(t.slsk.username)) byUser.set(t.slsk.username, []);
+    byUser.get(t.slsk.username).push({ filename: t.slsk.filename, size: t.slsk.size });
+  }
+  try {
+    for (const [username, files] of byUser) await invoke("slsk_download", { username, files });
+    setStatus(tracks.length === 1 ? `Downloading “${tracks[0].title}” — see Downloads` : `Downloading ${tracks.length} files — see Downloads`, 4000);
+  } catch (e) {
+    setStatus(String(e), 6000);
+  }
+  pollSlskTransfers();
+}
+
+/** Every result in the same folder from the same user: usually the whole album. */
+const slskFolderOf = (t) => state.shown.filter((x) => x.slsk && x.slsk.username === t.slsk.username &&
+  x.slsk.filename.slice(0, x.slsk.filename.length - baseName(x.slsk.filename).length) ===
+  t.slsk.filename.slice(0, t.slsk.filename.length - baseName(t.slsk.filename).length));
+
+function slskSongMenu(t) {
+  const folder = slskFolderOf(t);
+  return [
+    { label: "Download", icon: "i-download", action: () => slskDownload([t]) },
+    { label: `Download whole folder (${folder.length})`, icon: "i-download", disabled: folder.length < 2, action: () => slskDownload(folder) },
+    "-",
+    { label: "Copy file name", icon: "i-link", action: () => copyText(baseName(t.slsk.filename), "File name copied") },
+  ];
+}
+
+// ---------------------------------------------------- downloads in slskd
+
+function slskDone(x) {
+  return x.state.includes("Completed");
+}
+function slskOk(x) {
+  return x.state.includes("Succeeded");
+}
+function slskActive() {
+  return state.slsk.transfers.filter((x) => !slskDone(x)).length;
+}
+let slskTransferTimer, slskSeenDone = null, slskRescanTimer;
+
+async function pollSlskTransfers() {
+  clearTimeout(slskTransferTimer);
+  const s = state.slsk;
+  if (!s.status) return;
+  try {
+    s.transfers = await invoke("slsk_transfers");
+  } catch {
+    return;
+  }
+  // new files finished: pick them up if the download folder is in the library
+  const done = new Set(s.transfers.filter(slskOk).map((x) => x.id));
+  if (slskSeenDone && [...done].some((id) => !slskSeenDone.has(id))) {
+    clearTimeout(slskRescanTimer);
+    slskRescanTimer = setTimeout(async () => (await slskInLibrary()) && rescan(false), 2500);
+  }
+  slskSeenDone = done;
+  renderDownloads();
+  const busy = slskActive() > 0 || !$("downloads").hidden;
+  slskTransferTimer = setTimeout(pollSlskTransfers, busy ? 1500 : 15000);
+}
+
+async function slskInLibrary() {
+  const folder = (await invoke("slsk_folder")).toLowerCase();
+  return state.settings.folders.some((f) => folder.startsWith(f.toLowerCase()));
+}
+
+function slskTransferText(x) {
+  const st = x.state;
+  if (st.includes("Succeeded")) return `Done · ${fmtBytes(x.size)}`;
+  if (st.includes("Cancelled")) return "Cancelled";
+  if (st.includes("Completed")) return `Failed${x.error ? `: ${x.error}` : ` (${st.replace("Completed, ", "")})`}`;
+  if (st.includes("InProgress")) {
+    const pct = x.size ? Math.floor((x.bytes / x.size) * 100) : 0;
+    return `${pct}% · ${fmtBytes(x.bytes)} of ${fmtBytes(x.size)}${x.speed ? ` · ${fmtBytes(x.speed)}/s` : ""}`;
+  }
+  if (st.includes("Remotely")) return `Waiting in ${x.username}'s queue${x.placeInQueue ? ` (#${x.placeInQueue})` : ""}`;
+  if (st.includes("Queued")) return "Waiting";
+  return "Starting…";
+}
+
+function renderSlskTransfers() {
+  const list = state.slsk.transfers;
+  $("dl-slsk-title").hidden = !list.length;
+  $("dl-slsk-title").textContent = `Soulseek · ${list.length}`;
+  $("dl-slsk").innerHTML = list.slice(0, 300).map((x) => {
+    const failed = slskDone(x) && !slskOk(x);
+    const cls = slskOk(x) ? "saved" : failed ? "failed" : "";
+    const bar = x.state.includes("InProgress") && x.size ? `<div class="dl-bar small"><i style="width:${(x.bytes / x.size) * 100}%"></i></div>` : "";
+    const actions = !slskDone(x) ? `<button class="icon-btn" data-act="slsk-cancel" title="Cancel"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`
+      : (x.path ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
+        (failed ? `<button class="btn small" data-act="slsk-retry">Retry</button>` : "") +
+        `<button class="icon-btn" data-act="slsk-remove" title="Remove from list"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`;
+    const name = baseName(x.filename);
+    return `<div class="dl-row ${cls}" data-slsk="${esc(x.id)}">${coverHtml("", parentName(x.filename) || name)}<div class="dl-row-text">` +
+      `<div class="name" title="${esc(x.filename)}">${esc(name)}</div><div class="sub" title="${esc(slskTransferText(x))}">${esc(x.username)} · ${esc(slskTransferText(x))}</div>${bar}</div>` +
+      `<div class="dl-row-actions">${actions}</div></div>`;
+  }).join("");
+}
+
+$("downloads").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-act^='slsk-']");
+  if (!b) return;
+  const x = state.slsk.transfers.find((t) => t.id === b.closest(".dl-row").dataset.slsk);
+  if (!x) return;
+  const act = b.dataset.act;
+  try {
+    if (act === "slsk-cancel") await invoke("slsk_cancel", { username: x.username, id: x.id, remove: false });
+    if (act === "slsk-remove") await invoke("slsk_cancel", { username: x.username, id: x.id, remove: true });
+    if (act === "slsk-reveal") await invoke("slsk_reveal", { path: x.path });
+    if (act === "slsk-retry") {
+      await invoke("slsk_cancel", { username: x.username, id: x.id, remove: true });
+      await invoke("slsk_download", { username: x.username, files: [{ filename: x.filename, size: x.size }] });
+    }
+  } catch (err) {
+    setStatus(String(err), 5000);
+  }
+  pollSlskTransfers();
+});
+
+// ---------------------------------------------------------- settings
+
+function renderSlskSettings() {
+  const c = state.settings.soulseek || {}, s = state.slsk;
+  const status = $("slsk-status");
+  status.textContent = slskStatusText();
+  status.className = "hint" + (slskLoggedIn() ? " ok" : s.error && !s.status ? " err" : "");
+  $("slsk-connect").textContent = s.status ? "Reconnect" : "Connect";
+  $("slsk-connect").disabled = s.connecting;
+  $("slsk-disconnect").hidden = !s.status;
+  $("slsk-managed").checked = !c.external;
+  $("slsk-managed-fields").hidden = !!c.external;
+  $("slsk-external-fields").hidden = !c.external;
+  $("slsk-share").checked = c.shareLibrary !== false;
+  $("slsk-auto").checked = !!c.autoConnect;
+  $("slsk-exe").textContent = c.exePath || "Not installed yet";
+  for (const [id, value] of [["slsk-user", c.username], ["slsk-pass", c.password], ["slsk-port", c.listenPort || ""], ["slsk-url", c.url], ["slsk-key", c.apiKey]]) {
+    if (document.activeElement !== $(id)) $(id).value = value ?? "";
+  }
+  invoke("slsk_folder").then((f) => ($("slsk-folder").textContent = f));
+  slskInLibrary().then((yes) => ($("slsk-add-library").hidden = yes));
+}
+
+async function saveSlskConfig() {
+  const c = state.settings.soulseek || {};
+  state.settings = await invoke("slsk_set_config", {
+    config: {
+      ...c,
+      external: !$("slsk-managed").checked,
+      url: $("slsk-url").value,
+      apiKey: $("slsk-key").value,
+      exePath: c.exePath || "",
+      username: $("slsk-user").value,
+      password: $("slsk-pass").value,
+      shareLibrary: $("slsk-share").checked,
+      listenPort: Number($("slsk-port").value) || 0,
+      autoConnect: $("slsk-auto").checked,
+    },
+  });
+  renderSlskSettings();
+}
+
+for (const id of ["slsk-managed", "slsk-share", "slsk-auto", "slsk-user", "slsk-pass", "slsk-port", "slsk-url", "slsk-key"]) {
+  $(id).addEventListener("change", saveSlskConfig);
+}
+$("slsk-connect").addEventListener("click", async () => {
+  await saveSlskConfig();
+  slskConnect();
+});
+$("slsk-disconnect").addEventListener("click", slskDisconnect);
+$("slsk-browse").addEventListener("click", async () => {
+  const path = await invoke("slsk_pick_exe");
+  if (!path) return;
+  state.settings.soulseek = { ...state.settings.soulseek, exePath: path };
+  await saveSlskConfig();
+});
+$("slsk-change").addEventListener("click", async () => {
+  const settings = await invoke("slsk_pick_folder");
+  if (settings) state.settings = settings;
+  renderSlskSettings();
+});
+$("slsk-open").addEventListener("click", () => invoke("slsk_open_folder").catch((e) => setStatus(String(e), 5000)));
+$("slsk-add-library").addEventListener("click", async () => {
+  state.settings = await invoke("slsk_add_to_library");
+  renderFolders();
+  renderSlskSettings();
+  rescan(false);
+});
+$("slsk-empty-setup").addEventListener("click", () => {
+  openSettings();
+  el.settings.querySelector('.settings-tabs [data-tab="integrations"]').click();
+  $("slsk-section").scrollIntoView({ block: "start" });
+});
+$("slsk-empty-connect").addEventListener("click", slskConnect);
+
+// ------------------------------------------- "Download for me" (yt-dlp, slskd)
+
+const toolButtons = { "yt-dlp": "dl-ytdlp-get", slskd: "slsk-get" };
+const toolStatus = { "yt-dlp": "dl-ytdlp-status", slskd: "slsk-tool-status" };
+
+async function installTool(name) {
+  const button = $(toolButtons[name]), status = $(toolStatus[name]);
+  button.disabled = true;
+  status.className = "hint";
+  status.textContent = `Downloading ${name} from GitHub…`;
+  try {
+    state.settings = await invoke("tool_install", { name });
+    status.className = "hint ok";
+    status.textContent = `Installed ${name}.`;
+    renderDownloadSettings();
+    renderSlskSettings();
+    if (name === "yt-dlp") checkYtdlp();
+  } catch (e) {
+    status.className = "hint err";
+    status.textContent = String(e);
+  }
+  button.disabled = false;
+}
+
+listen("tool-progress", ({ payload }) => {
+  const status = $(toolStatus[payload.name]);
+  if (!status) return;
+  status.textContent = `Downloading ${payload.name}… ${fmtBytes(payload.done)}${payload.total ? ` of ${fmtBytes(payload.total)}` : ""}`;
+});
+$("dl-ytdlp-get").addEventListener("click", () => installTool("yt-dlp"));
+$("slsk-get").addEventListener("click", () => installTool("slskd"));
+

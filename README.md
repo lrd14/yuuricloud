@@ -6,7 +6,7 @@
 [![platforms](https://img.shields.io/badge/platforms-windows%20%7C%20macos%20%7C%20linux-9a9a9a)](https://github.com/lrd14/yuuricloud/releases/latest)
 [![built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db?logo=tauri&logoColor=white)](https://tauri.app)
 
-A small, fast music player for your local library and your SoundCloud, on Windows, macOS and Linux.
+A small, fast music player for your local library, your SoundCloud and Soulseek, on Windows, macOS and Linux.
 
 <p align="center"><img src="docs/preview.png" alt="yuuricloud showing a music library with album covers, and the Downloads page" width="900"></p>
 
@@ -90,10 +90,10 @@ where **Add to library** makes them show up in your library.
 
 - **Songs the artist allows downloads for** are saved straight from SoundCloud, often as the original upload (WAV,
   FLAC and so on).
-- **Any other song** needs [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation). Install it yourself, then turn on
-  **Use yt-dlp for other songs** and click **Check**. If `yt-dlp` isn't on your PATH, paste the full path to the
-  program. This is off by default, because saving songs the artist hasn't made downloadable is against SoundCloud's
-  terms.
+- **Any other song** needs [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation). Turn on **Use yt-dlp for other
+  songs**, then either click **Download for me** (yuuricloud fetches the latest yt-dlp from its GitHub releases) or
+  install it yourself and paste its path. This is off by default, because saving songs the artist hasn't made
+  downloadable is against SoundCloud's terms.
 
 How it works:
 
@@ -102,6 +102,31 @@ How it works:
   next song in the queue downloads ahead, and only the last 8 songs are kept.
 - Go+ and region-locked songs: tracks SoundCloud marks as preview play 30 seconds. Blocked and copy-protected
   tracks are greyed out or skipped.
+
+### Soulseek
+
+The Soulseek tab searches the [Soulseek](https://www.slsknet.org) file-sharing network and downloads what you pick.
+It works through [slskd](https://github.com/slskd/slskd), a free Soulseek program:
+
+1. Settings → Integrations → Soulseek: click **Download for me** to get slskd (or **Browse…** to use a copy you have).
+2. Enter your Soulseek username and password. A name nobody has taken yet becomes a new free account the first
+   time you connect.
+3. Click **Connect**. yuuricloud runs slskd hidden in the background and stops it when you quit.
+
+Then type in the search box and press **Enter**. Results show who has each file, the folder it's in and its
+quality; users with a free upload slot and fast connections come first. **Double-click** a result (or press
+**Enter**) to download it, or right-click for **Download whole folder**. Downloads show on the Downloads page and
+land in `Music/Soulseek`; **Add to library** makes them show up in your library as they finish.
+
+- Your Soulseek download folder is always shared, and **Share my music library** shares your library folders too.
+  Many Soulseek users won't send files to people who share nothing.
+- The listening port is picked automatically. If you forward a port on your router, enter it under **Listening port**.
+- Already run slskd yourself? Turn off **Run slskd for me** and enter its address and an API key instead.
+- Soulseek is legal, but much of what's shared on it is copyrighted. What you download or share is your
+  responsibility.
+
+"Download for me" (for yt-dlp and slskd) fetches the latest official release from GitHub into the app data folder
+and checks it against the SHA-256 checksum GitHub publishes before using it.
 
 ### Last.fm
 
@@ -119,7 +144,8 @@ Songs scrobble after half their length or 4 minutes (whichever comes first); son
 
 If Last.fm keys are set, the status also shows the album cover from Last.fm (Discord can't show local images).
 
-Keys, the Last.fm session and the SoundCloud login are stored in `settings.json` in the app data folder.
+Keys, the Last.fm session, the SoundCloud login and the Soulseek login are stored in `settings.json` in the app
+data folder.
 - OS media keys work where the webview supports the Media Session API
 
 ## Layout
@@ -128,3 +154,5 @@ Keys, the Last.fm session and the SoundCloud login are stored in `settings.json`
 - `src-tauri/src/library.rs` – folder scanning, tag reading, artist/album inference (`cargo test` covers the folder rules)
 - `src-tauri/src/main.rs` – Tauri commands the UI calls
 - `src-tauri/src/soundcloud.rs` – SoundCloud sign-in, API calls and stream downloads
+- `src-tauri/src/slsk.rs` – runs slskd and talks to its API for Soulseek search and downloads
+- `src-tauri/src/tools.rs` – "Download for me": installs yt-dlp and slskd from their GitHub releases

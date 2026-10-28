@@ -438,9 +438,9 @@ tbody tr.flash { animation: flash calc(1.4s * var(--speed)) ease-out both; }
 .source-switch button { padding: 5px 12px; }
 #sc-refresh { display: none; }
 body.sc.sc-connected #sc-refresh { display: inline-flex; }
-body.sc #add-folder, body.sc #rescan { display: none; }
-body.sc .right { grid-template-rows: minmax(0, 1fr); }
-body.sc .panel.albums { display: none; }
+body.sc #add-folder, body.sc #rescan, body.slsk #add-folder, body.slsk #rescan { display: none; }
+body.sc .right, body.slsk .right { grid-template-rows: minmax(0, 1fr); }
+body.sc .panel.albums, body.slsk .panel.albums { display: none; }
 .list li.group { pointer-events: none; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 12px; background: none; }
 tbody tr.unplayable { opacity: 0.4; }
 .badge { display: inline-block; margin-left: 8px; padding: 1px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; color: var(--muted); border: 1px solid var(--line); vertical-align: 1px; }
@@ -503,7 +503,8 @@ tr.fav .heart { display: inline-block; }
 }
 .dl-btn.busy svg { color: var(--accent); animation: dl-bob 1.2s ease-in-out infinite; }
 @keyframes dl-bob { 50% { transform: translateY(2px); } }
-body.show-downloads #library, body.show-downloads #empty, body.show-downloads #sc-empty { display: none !important; }
+body.show-downloads #library, body.show-downloads #empty, body.show-downloads #sc-empty,
+body.show-downloads #slsk-empty { display: none !important; }
 .downloads-page {
   grid-row: 2; min-height: 0; margin: 0 8px 8px; display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: var(--card-radius); overflow: hidden;
@@ -560,3 +561,10 @@ body.show-downloads #library, body.show-downloads #empty, body.show-downloads #s
   .source-switch button { padding: 5px 9px; }
   .titlebar .btn { padding: 6px 10px; }
 }
+
+/* Soulseek */
+.list li.none { color: var(--muted); background: none; cursor: default; }
+.empty .actions { display: flex; gap: 8px; justify-content: center; }
+.dl-bar.small { height: 4px; margin-top: 5px; }
+.dl-bar.small i { transition: width 400ms linear; }
+.dl-row.saved .sub { color: color-mix(in srgb, #3fbf7f 70%, var(--muted)); }

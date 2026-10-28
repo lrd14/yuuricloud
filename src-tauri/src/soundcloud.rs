@@ -109,7 +109,7 @@ pub struct ScPlaylist {
     pub liked: bool,
 }
 
-fn agent(timeout_secs: u64) -> ureq::Agent {
+pub(crate) fn agent(timeout_secs: u64) -> ureq::Agent {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(timeout_secs)))

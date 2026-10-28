@@ -5,7 +5,9 @@ mod cover_color;
 mod downloads;
 mod integrations;
 mod library;
+mod slsk;
 mod soundcloud;
+mod tools;
 mod waveform;
 
 use std::collections::HashMap;
@@ -16,7 +18,7 @@ use std::sync::Mutex;
 use integrations::{Discord, NowPlaying};
 use library::{Settings, Track};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -37,6 +39,12 @@ struct AppState {
     sc_auth: Mutex<()>,
     /// set to stop the SoundCloud download in progress
     dl_cancel: AtomicBool,
+    /// set to stop a "Download for me" in progress
+    tool_cancel: AtomicBool,
+    /// the slskd yuuricloud is using for Soulseek, once connected
+    slsk: Mutex<Option<slsk::Conn>>,
+    /// held while slskd starts, so two clicks don't start two copies
+    slsk_starting: Mutex<()>,
 }
 
 impl AppState {
@@ -57,6 +65,9 @@ impl AppState {
     }
     fn sc_stream_dir(&self) -> PathBuf {
         self.data_dir.join("soundcloud-cache")
+    }
+    fn tools_dir(&self) -> PathBuf {
+        self.data_dir.join("tools")
     }
 }
 
@@ -561,6 +572,255 @@ fn dl_reveal(app: AppHandle, state: State<AppState>, path: String) -> Result<(),
     app.opener().reveal_item_in_dir(&path).map_err(|e| e.to_string())
 }
 
+// ------------------------------------------------------------- helper programs
+
+/// "Download for me": install yt-dlp or slskd from its GitHub release and start using it.
+#[tauri::command]
+async fn tool_install(app: AppHandle, name: String) -> Result<Settings, String> {
+    let tool = tools::Tool::parse(&name)?;
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.tool_cancel.store(false, Ordering::Relaxed);
+        let last = Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        let report = |done: u64, total: Option<u64>| {
+            let mut last = last.lock().unwrap();
+            if last.elapsed().as_millis() >= 150 || Some(done) == total {
+                *last = std::time::Instant::now();
+                let _ = app.emit("tool-progress", serde_json::json!({ "name": name, "done": done, "total": total }));
+            }
+        };
+        if tool == tools::Tool::Slskd && state.slsk.lock().unwrap().as_ref().is_some_and(|c| c.managed()) {
+            return Err("Disconnect from Soulseek first; slskd is running".into());
+        }
+        let (path, _version) = tools::install(tool, &state.tools_dir(), &report, &state.tool_cancel)?;
+        let path = path.to_string_lossy().into_owned();
+        let mut s = state.settings.lock().unwrap();
+        match tool {
+            tools::Tool::YtDlp => {
+                s.downloads.ytdlp_path = path;
+                s.downloads.use_ytdlp = true;
+            }
+            tools::Tool::Slskd => s.soulseek.exe_path = path,
+        }
+        state.save_settings(&s);
+        Ok(s.clone())
+    })
+    .await
+}
+
+#[tauri::command]
+fn tool_cancel(state: State<AppState>) {
+    state.tool_cancel.store(true, Ordering::Relaxed);
+}
+
+// ---------------------------------------------------------------- Soulseek
+
+/// Where Soulseek downloads go: the chosen folder, or Music/Soulseek.
+fn slsk_download_folder(app: &AppHandle, cfg: &slsk::SlskConfig) -> PathBuf {
+    if !cfg.folder.is_empty() {
+        return PathBuf::from(&cfg.folder);
+    }
+    let music = app.path().audio_dir().unwrap_or_else(|_| app.path().home_dir().unwrap_or_default().join("Music"));
+    music.join("Soulseek")
+}
+
+/// Folders to share: the download folder plus, if wanted, the library folders. Folders inside
+/// another shared folder are left out, since slskd would list their files twice.
+fn slsk_shares(settings: &Settings, downloads: &Path) -> Vec<String> {
+    let mut all: Vec<PathBuf> = vec![downloads.to_path_buf()];
+    if settings.soulseek.share_library {
+        all.extend(settings.folders.iter().map(PathBuf::from));
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in all {
+        if out.iter().any(|o| p.starts_with(o)) {
+            continue;
+        }
+        out.retain(|o| !o.starts_with(&p));
+        out.push(p);
+    }
+    out.into_iter().map(|p| p.to_string_lossy().into_owned()).collect()
+}
+
+/// Run `f` with the slskd connection, or say that Soulseek isn't connected.
+async fn with_slsk<T: Send + 'static>(
+    app: AppHandle,
+    f: impl FnOnce(&slsk::Conn) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut guard = state.slsk.lock().unwrap();
+        let Some(conn) = guard.as_mut() else { return Err("Soulseek isn't connected".into()) };
+        if !conn.alive() {
+            guard.take();
+            return Err("slskd stopped unexpectedly — connect again".into());
+        }
+        f(conn)
+    })
+    .await
+}
+
+#[tauri::command]
+fn slsk_set_config(state: State<AppState>, config: slsk::SlskConfig) -> Settings {
+    let mut s = state.settings.lock().unwrap();
+    s.soulseek = slsk::SlskConfig {
+        url: config.url.trim().to_string(),
+        api_key: config.api_key.trim().to_string(),
+        exe_path: config.exe_path.trim().trim_matches('"').to_string(),
+        username: config.username.trim().to_string(),
+        // the folder is only changed with the folder picker
+        folder: s.soulseek.folder.clone(),
+        ..config
+    };
+    state.save_settings(&s);
+    s.clone()
+}
+
+/// Start slskd (or reach the user's own) and log in to Soulseek.
+#[tauri::command]
+async fn slsk_connect(app: AppHandle) -> Result<serde_json::Value, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let _starting = state.slsk_starting.lock().unwrap();
+        state.slsk.lock().unwrap().take(); // stop the old one first: it holds the Soulseek port
+        let settings = state.settings.lock().unwrap().clone();
+        let cfg = &settings.soulseek;
+        let conn = if cfg.external {
+            slsk::connect_external(cfg)?
+        } else {
+            let downloads = slsk_download_folder(&app, cfg);
+            let exe = if cfg.exe_path.is_empty() {
+                tools::Tool::Slskd.installed_path(&state.tools_dir())
+            } else {
+                PathBuf::from(&cfg.exe_path)
+            };
+            let shares = slsk_shares(&settings, &downloads);
+            slsk::start_managed(
+                cfg,
+                slsk::Launch { exe: &exe, app_dir: &state.data_dir.join("slskd"), downloads: &downloads, shares: &shares },
+            )?
+        };
+        let status = conn.status().unwrap_or_default();
+        *state.slsk.lock().unwrap() = Some(conn);
+        Ok(status)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn slsk_disconnect(app: AppHandle) -> Result<(), String> {
+    blocking(move || {
+        let conn = app.state::<AppState>().slsk.lock().unwrap().take();
+        drop(conn); // stops a managed slskd
+        Ok(())
+    })
+    .await
+}
+
+/// Whether slskd is running and logged in to Soulseek. Null when not connected.
+#[tauri::command]
+async fn slsk_status(app: AppHandle) -> Result<serde_json::Value, String> {
+    let connected = app.state::<AppState>().slsk.lock().unwrap().is_some();
+    if !connected {
+        return Ok(serde_json::Value::Null);
+    }
+    with_slsk(app, |c| c.status()).await
+}
+
+#[tauri::command]
+async fn slsk_search(app: AppHandle, text: String) -> Result<String, String> {
+    with_slsk(app, move |c| c.search(text.trim())).await
+}
+
+#[tauri::command]
+async fn slsk_search_results(app: AppHandle, id: String) -> Result<slsk::SearchResults, String> {
+    with_slsk(app, move |c| c.search_results(&id)).await
+}
+
+#[tauri::command]
+async fn slsk_search_stop(app: AppHandle, id: String) -> Result<(), String> {
+    with_slsk(app, move |c| c.stop_search(&id)).await
+}
+
+#[tauri::command]
+async fn slsk_download(app: AppHandle, username: String, files: Vec<slsk::QueueFile>) -> Result<(), String> {
+    with_slsk(app, move |c| c.download(&username, &files)).await
+}
+
+#[tauri::command]
+async fn slsk_transfers(app: AppHandle) -> Result<Vec<slsk::TransferInfo>, String> {
+    with_slsk(app, |c| c.transfers()).await
+}
+
+#[tauri::command]
+async fn slsk_cancel(app: AppHandle, username: String, id: String, remove: bool) -> Result<(), String> {
+    with_slsk(app, move |c| c.cancel(&username, &id, remove)).await
+}
+
+#[tauri::command]
+async fn slsk_clear_finished(app: AppHandle) -> Result<(), String> {
+    with_slsk(app, |c| c.clear_finished()).await
+}
+
+#[tauri::command]
+fn slsk_folder(app: AppHandle, state: State<AppState>) -> String {
+    let cfg = state.settings.lock().unwrap().soulseek.clone();
+    slsk_download_folder(&app, &cfg).to_string_lossy().into_owned()
+}
+
+#[tauri::command]
+async fn slsk_pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<Option<Settings>, String> {
+    let Some(picked) = app.dialog().file().set_title("Choose where to save Soulseek downloads").blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(|e| e.to_string())?;
+    let mut s = state.settings.lock().unwrap();
+    s.soulseek.folder = path.to_string_lossy().into_owned();
+    state.save_settings(&s);
+    Ok(Some(s.clone()))
+}
+
+#[tauri::command]
+fn slsk_open_folder(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let folder = state.slsk.lock().unwrap().as_ref().and_then(|c| c.downloads_dir.clone());
+    let folder = folder.unwrap_or_else(|| slsk_download_folder(&app, &state.settings.lock().unwrap().soulseek));
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    app.opener().open_path(folder.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Add the Soulseek download folder to the library so downloads show up there.
+#[tauri::command]
+fn slsk_add_to_library(app: AppHandle, state: State<AppState>) -> Result<Settings, String> {
+    let mut s = state.settings.lock().unwrap();
+    let folder = slsk_download_folder(&app, &s.soulseek);
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    allow_dir(&app, &folder);
+    let folder = folder.to_string_lossy().into_owned();
+    if !s.folders.contains(&folder) {
+        s.folders.push(folder);
+        state.save_settings(&s);
+    }
+    Ok(s.clone())
+}
+
+/// Show a finished Soulseek download in the file manager (only files in the download folder).
+#[tauri::command]
+fn slsk_reveal(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
+    let dir = state.slsk.lock().unwrap().as_ref().and_then(|c| c.downloads_dir.clone());
+    if !dir.is_some_and(|d| Path::new(&path).starts_with(d)) {
+        return Err("Not in the Soulseek download folder".into());
+    }
+    app.opener().reveal_item_in_dir(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn slsk_pick_exe(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(picked) = app.dialog().file().set_title("Find the slskd program").blocking_pick_file() else {
+        return Ok(None);
+    };
+    Ok(Some(picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 async fn sc_waveform(url: String, bins: usize) -> Result<Vec<f32>, String> {
     blocking(move || soundcloud::waveform(&url, bins)).await
@@ -632,6 +892,9 @@ fn main() {
                 sc_cancel: AtomicBool::new(false),
                 sc_auth: Mutex::new(()),
                 dl_cancel: AtomicBool::new(false),
+                tool_cancel: AtomicBool::new(false),
+                slsk: Mutex::new(None),
+                slsk_starting: Mutex::new(()),
             });
             Ok(())
         })
@@ -677,8 +940,33 @@ fn main() {
             sc_search,
             sc_prepare,
             sc_waveform,
+            tool_install,
+            tool_cancel,
+            slsk_set_config,
+            slsk_connect,
+            slsk_disconnect,
+            slsk_status,
+            slsk_search,
+            slsk_search_results,
+            slsk_search_stop,
+            slsk_download,
+            slsk_transfers,
+            slsk_cancel,
+            slsk_clear_finished,
+            slsk_folder,
+            slsk_pick_folder,
+            slsk_open_folder,
+            slsk_add_to_library,
+            slsk_reveal,
+            slsk_pick_exe,
             scan
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running yuuricloud");
+        .build(tauri::generate_context!())
+        .expect("error while running yuuricloud")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                // stop the slskd we started; dropping the connection kills it
+                app.state::<AppState>().slsk.lock().unwrap().take();
+            }
+        });
 }

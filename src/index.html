@@ -16,6 +16,7 @@
       <div id="source" class="segmented source-switch">
         <button data-source="local" class="on">Library</button>
         <button data-source="sc">SoundCloud</button>
+        <button data-source="slsk">Soulseek</button>
       </div>
       <label class="search">
         <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
@@ -57,6 +58,15 @@
       <button id="sc-open-settings" class="btn accent">Set up SoundCloud</button>
     </section>
 
+    <section id="slsk-empty" class="empty" hidden>
+      <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
+      <p id="slsk-empty-text"></p>
+      <div class="actions">
+        <button id="slsk-empty-connect" class="btn accent" hidden>Connect</button>
+        <button id="slsk-empty-setup" class="btn">Soulseek settings</button>
+      </div>
+    </section>
+
     <section id="downloads" class="downloads-page" hidden>
       <header class="dl-head">
         <div>
@@ -76,6 +86,8 @@
         <div id="dl-current"></div>
         <h2 id="dl-next-title" class="dl-section">Up next</h2>
         <div id="dl-next" class="dl-list"></div>
+        <h2 id="dl-slsk-title" class="dl-section" hidden>Soulseek</h2>
+        <div id="dl-slsk" class="dl-list"></div>
         <h2 id="dl-done-title" class="dl-section">Finished</h2>
         <div id="dl-done" class="dl-list"></div>
       </div>
@@ -102,7 +114,7 @@
           <div class="table-wrap">
             <table id="song-table">
               <thead>
-                <tr><th class="num">#</th><th>Title</th><th>Artist</th><th class="col-album">Album</th><th class="time">Time</th></tr>
+                <tr><th class="num">#</th><th>Title</th><th id="th-artist">Artist</th><th id="th-album" class="col-album">Album</th><th class="time">Time</th></tr>
               </thead>
               <tbody id="song-body"></tbody>
             </table>
@@ -344,6 +356,7 @@
             <div id="dl-ytdlp-fields" class="fields">
               <label>yt-dlp program (leave empty if it's on your PATH)<input id="dl-ytdlp-path" type="text" spellcheck="false" autocomplete="off" placeholder="yt-dlp" /></label>
               <button id="dl-ytdlp-check" class="btn">Check</button>
+              <button id="dl-ytdlp-get" class="btn">Download for me</button>
             </div>
             <div id="dl-ytdlp-status" class="hint"></div>
             <details id="sc-own" class="own-app">
@@ -365,6 +378,64 @@
               <button id="sc-save" class="btn">Save keys</button>
             </div>
             </details>
+
+            <h3 id="slsk-section" class="section">Soulseek</h3>
+            <p class="hint">
+              Search and download music from Soulseek in the Soulseek tab. yuuricloud does this through
+              <a href="#" data-open="https://github.com/slskd/slskd">slskd</a>, a free Soulseek program it can download
+              and run for you in the background. Use your Soulseek username and password; a name nobody has taken yet
+              becomes a new free account the first time you connect. Soulseek is a file-sharing network: much of what's
+              on it is copyrighted, and what you download or share is your responsibility.
+            </p>
+            <div class="row">
+              <div><div class="label">Status</div><div id="slsk-status" class="hint">Not connected</div></div>
+              <div class="actions">
+                <button id="slsk-connect" class="btn">Connect</button>
+                <button id="slsk-disconnect" class="btn danger" hidden>Disconnect</button>
+              </div>
+            </div>
+            <div class="row">
+              <div><div class="label">Run slskd for me</div><div class="hint">Turn off to use an slskd you already run yourself.</div></div>
+              <label class="switch"><input id="slsk-managed" type="checkbox" /><span></span></label>
+            </div>
+            <div id="slsk-managed-fields">
+              <div class="row">
+                <div><div class="label">slskd program</div><div id="slsk-exe" class="hint path"></div></div>
+                <div class="actions">
+                  <button id="slsk-get" class="btn">Download for me</button>
+                  <button id="slsk-browse" class="btn">Browse…</button>
+                </div>
+              </div>
+              <div id="slsk-tool-status" class="hint"></div>
+              <div class="fields">
+                <label>Soulseek username<input id="slsk-user" type="text" spellcheck="false" autocomplete="off" /></label>
+                <label>Password<input id="slsk-pass" type="password" spellcheck="false" autocomplete="off" /></label>
+                <label>Listening port<input id="slsk-port" type="number" min="1024" max="65535" placeholder="Automatic" /></label>
+              </div>
+              <div class="row">
+                <div>
+                  <div class="label">Share my music library</div>
+                  <div class="hint">Your Soulseek download folder is always shared. Many Soulseek users won't send files to people who share nothing.</div>
+                </div>
+                <label class="switch"><input id="slsk-share" type="checkbox" /><span></span></label>
+              </div>
+              <div class="row">
+                <div><div class="label">Download folder</div><div id="slsk-folder" class="hint path"></div></div>
+                <div class="actions">
+                  <button id="slsk-add-library" class="btn" hidden>Add to library</button>
+                  <button id="slsk-open" class="btn">Open</button>
+                  <button id="slsk-change" class="btn">Change…</button>
+                </div>
+              </div>
+            </div>
+            <div id="slsk-external-fields" class="fields" hidden>
+              <label>slskd address<input id="slsk-url" type="text" spellcheck="false" autocomplete="off" placeholder="http://localhost:5030" /></label>
+              <label>API key<input id="slsk-key" type="password" spellcheck="false" autocomplete="off" /></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Connect when yuuricloud opens</div></div>
+              <label class="switch"><input id="slsk-auto" type="checkbox" /><span></span></label>
+            </div>
 
             <h3 class="section">Last.fm</h3>
             <p class="hint">
