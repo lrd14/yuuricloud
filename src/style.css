@@ -39,7 +39,8 @@ svg { width: 20px; height: 20px; fill: currentColor; flex: none; }
 [hidden] { display: none !important; }
 
 #app {
-  display: grid; grid-template-rows: auto 1fr auto; height: 100vh;
+  /* never wider than the window: the title bar's buttons squeeze the search box instead */
+  display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); height: 100vh;
   background: var(--tint);
   border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: var(--radius);
