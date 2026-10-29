@@ -77,17 +77,26 @@ document.documentElement.classList.add(platform);
 const duo = /iPhone/.test(navigator.userAgent) && Math.max(screen.width, screen.height) / Math.min(screen.width, screen.height) < 1.7;
 document.body.classList.toggle("duo", duo);
 
-/**
- * Keep the app to the width of the screen that's showing. Open and held upright, the iPhone Duo
- * can lay the page out wider than the screen, which ran the app off the right edge.
- */
-function fitToScreen() {
-  if (visualViewport.scale !== 1) return; // zoomed in: the visible part isn't the screen
-  document.documentElement.style.setProperty("--app-w", Math.round(visualViewport.width) + "px");
-}
-if (ios && window.visualViewport) {
-  visualViewport.addEventListener("resize", fitToScreen);
-  fitToScreen();
+// TEMPORARY, for working out the iPhone Duo's layout: what the screen and web view measure,
+// shown along the bottom. Take this out once the Duo fits.
+if (duo) {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";
+  const line = document.createElement("div");
+  line.style.cssText = "position:fixed;left:8px;bottom:2px;z-index:99999;font:11px/1.2 ui-monospace,monospace;color:#ff0;background:#000a;padding:2px 4px;pointer-events:none;white-space:pre";
+  document.documentElement.append(probe, line);
+  const measure = () => {
+    const cs = getComputedStyle(probe), vv = window.visualViewport;
+    line.textContent = `win ${innerWidth}x${innerHeight}  doc ${document.documentElement.clientWidth}x${document.documentElement.clientHeight}` +
+      `  vv ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)}@${vv.scale} +${Math.round(vv.offsetLeft)}` : "-"}` +
+      `  screen ${screen.width}x${screen.height} dpr ${devicePixelRatio} ${screen.orientation?.type ?? ""}` +
+      `
+safe t${cs.paddingTop} r${cs.paddingRight} b${cs.paddingBottom} l${cs.paddingLeft}  app ${Math.round(document.getElementById("app").getBoundingClientRect().width)}`;
+  };
+  addEventListener("resize", measure);
+  window.visualViewport?.addEventListener("resize", measure);
+  setInterval(measure, 1000);
+  measure();
 }
 /** Touch screens play a song on the first tap; there's no double-click there. */
 const tapPlays = () => prefs.singleClick || ios;

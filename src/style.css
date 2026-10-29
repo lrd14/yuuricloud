@@ -702,8 +702,6 @@ body.ios .desktop-only, body.ios .win-controls, body.ios #downloads-btn, body.io
 body.ios #source [data-source="slsk"], body.ios .volume, body.ios .local-hint { display: none !important; }
 /* no see-through window here: a solid background, edge to edge, clear of the notch and home bar */
 html.ios, html.ios body { background: #101218; overflow: hidden; }
-/* --app-w is the width of the screen that's showing (main.js); see fitToScreen there */
-body.ios #app { width: var(--app-w, auto); }
 body.ios {
   --tint: rgb(16, 18, 24);
   -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
