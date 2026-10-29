@@ -1819,7 +1819,7 @@ listen("sc-link-failed", ({ payload }) => setStatus(String(payload), 6000));
 // ------------------------------------------------------------- phone layout
 
 /** Phones show one panel at a time: artists (or SoundCloud lists), then albums, then songs. */
-const phoneQuery = matchMedia("(max-width: 700px)");
+const phoneQuery = matchMedia("(max-width: 599px), (max-width: 700px) and (max-height: 540px)"); // same as style.css
 const phoneLayout = () => ios && phoneQuery.matches;
 function showPane(pane) {
   document.body.dataset.pane = pane;

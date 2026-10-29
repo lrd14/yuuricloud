@@ -718,7 +718,20 @@ body.ios .range::-webkit-slider-thumb { opacity: 1; }
 body.ios input, body.ios select { font-size: 16px; }
 body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-top) - env(safe-area-inset-bottom))); }
 
-@media (max-width: 700px) {
+/* Small tablets and the iPhone Duo's inner screen, held either way up: all three panels, made
+   narrower. Comes before the phone layout so a phone's single panel wins where both apply. */
+@media (max-width: 900px) {
+  body.ios #library { grid-template-columns: 180px minmax(0, 1fr); }
+  body.ios { --cover-min: 120px; }
+  body.ios .titlebar .search { min-width: 0; }
+  body.ios .player { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; }
+}
+
+/* Phones, Split View, and the iPhone Duo's outer screen: one panel at a time. Width alone can't
+   tell the Duo's outer screen on its side (about 680 × 470) from its inner screen held upright
+   (about 670 × 900), so the 600–700 range only counts when the screen is short as well.
+   phoneQuery in main.js matches this. */
+@media (max-width: 599px), (max-width: 700px) and (max-height: 540px) {
   /* title bar: logo, sources and settings on top, search underneath */
   body.ios .titlebar { flex-wrap: wrap; height: auto; padding: 8px 12px; row-gap: 8px; }
   body.ios .brand { width: auto; margin: 0; }
@@ -764,10 +777,39 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
   body.ios .phone-code { flex-direction: column; align-items: flex-start; }
 }
 
-/* Small tablets and an open foldable (iPhone Duo's inner screen): all three panels, made narrower */
-@media (min-width: 701px) and (max-width: 900px) {
-  body.ios #library { grid-template-columns: 180px minmax(0, 1fr); }
-  body.ios { --cover-min: 120px; }
-  body.ios .titlebar .search { min-width: 0; }
-  body.ios .player { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; }
+
+/* Short and narrow, like the iPhone Duo's outer screen on its side or standing as a tent:
+   the song and its buttons share one row so the library keeps some room */
+@media (max-width: 700px) and (max-height: 540px) {
+  body.ios .titlebar { flex-wrap: nowrap; padding: 6px 12px; }
+  body.ios .titlebar .search { order: 0; flex: 1 1 auto; }
+  body.ios .search input { padding: 6px 0; }
+  body.ios .player { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 12px; padding: 8px 12px; }
+  body.ios .status { bottom: calc(env(safe-area-inset-bottom) + 84px); }
+}
+
+/* iPhone Duo partly folded like a book, with the crease running down the middle. WebKit reports
+   the two halves through the Viewport Segments API (a feature flag for now), and nothing here
+   applies until it does. Artists go on the left half, albums and songs on the right, and the
+   player puts the song on the left and its buttons on the right, so nothing sits on the crease. */
+@media (horizontal-viewport-segments: 2) {
+  body.ios #library {
+    grid-template-columns: calc(env(viewport-segment-right 0 0) - env(safe-area-inset-left) - 16px) minmax(0, 1fr);
+    column-gap: calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0) + 16px);
+  }
+  body.ios .player {
+    grid-template-columns: calc(env(viewport-segment-right 0 0) - env(safe-area-inset-left) - 32px) minmax(0, 1fr);
+    column-gap: calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0) + 16px);
+  }
+}
+
+/* Folded flat across the middle like a laptop: the library on the upper half, and the player
+   fills the lower half, like a remote you hold under it */
+@media (vertical-viewport-segments: 2) {
+  body.ios #app { grid-template-rows: auto minmax(0, 1fr) calc(env(viewport-segment-height 0 1) - env(safe-area-inset-bottom)); }
+  body.ios .player { height: auto; align-self: stretch; margin-top: 8px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 20px; }
+  body.ios .now .cover.small { width: 96px; height: 96px; }
+  body.ios .now-title { font-size: 18px; }
+  body.ios .buttons { gap: 26px; }
+  body.ios .status { bottom: calc(env(viewport-segment-height 0 1) + 8px); }
 }

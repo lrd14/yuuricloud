@@ -21,6 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The newest Xcode on the runner. Built with the iOS 27.1 SDK (Xcode 27.1), the app fills the
+      # iPhone Duo's screens edge to edge instead of keeping to the space beside the status bar.
+      - uses: maxim-lobanovsky/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
