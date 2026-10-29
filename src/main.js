@@ -68,8 +68,15 @@ const COVER_SIZES = { small: "120px", medium: "156px", large: "200px" };
 let prefs = { ...DEFAULT_PREFS };
 
 const appWindow = window.__TAURI__.window.getCurrentWindow();
-const platform = /Mac/.test(navigator.userAgent) ? "mac" : /Linux/.test(navigator.userAgent) ? "linux" : "windows";
+// iPads say they're Macs; only a touch screen tells them apart
+const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const platform = ios ? "ios" : /Mac/.test(navigator.userAgent) ? "mac" : /Linux/.test(navigator.userAgent) ? "linux" : "windows";
 document.body.classList.add(platform);
+document.documentElement.classList.add(platform);
+/** Touch screens play a song on the first tap; there's no double-click there. */
+const tapPlays = () => prefs.singleClick || ios;
+/** iOS doesn't let pages change the volume, so there's nothing to fade. */
+const fades = () => prefs.fade && !ios;
 
 // ------------------------------------------------------------------ helpers
 
@@ -181,30 +188,39 @@ async function load() {
   if (hasFolders && (prefs.scanOnStart || !state.tracks.length || needThumbs)) rescan(false);
   if (prefs.checkUpdates) checkForUpdate();
   // first start: walk through setting things up
-  if (!prefs.onboarded && !state.settings.folders.length && !state.tracks.length) openOnboarding();
+  if (!ios && !prefs.onboarded && !state.settings.folders.length && !state.tracks.length) openOnboarding();
 }
 
-async function rescan(full) {
+/** `quiet`: a check in the background, which only speaks up (and redraws) when something changed. */
+async function rescan(full, quiet = false) {
   if (state.scanning) {
     state.rescanQueued = true;
     return;
   }
   state.scanning = true;
-  setStatus("Scanning…");
+  quietScan = quiet;
+  if (!quiet) setStatus("Scanning…");
   try {
-    state.tracks = await invoke("scan", { full });
-    applySearch();
-    setStatus(summary(), 4000);
+    const tracks = await invoke("scan", { full });
+    const changed = !quiet || JSON.stringify(tracks) !== JSON.stringify(state.tracks);
+    state.tracks = tracks;
+    if (changed) {
+      applySearch();
+      setStatus(summary(), 4000);
+    }
   } catch (e) {
-    setStatus(`Scan failed: ${e}`, 6000);
+    if (!quiet) setStatus(`Scan failed: ${e}`, 6000);
   } finally {
     state.scanning = false;
+    quietScan = false;
   }
   if (state.rescanQueued) {
     state.rescanQueued = false;
     rescan(false);
   }
 }
+
+let quietScan = false;
 
 function summary() {
   const artists = new Set(state.tracks.map(artistKey)).size;
@@ -347,6 +363,8 @@ function renderSongs() {
     collator.compare(sortName(a.album), sortName(b.album)) ||
     a.discNo - b.discNo || a.trackNo - b.trackNo || collator.compare(a.title, b.title));
   const multiDisc = state.album !== null && new Set(tracks.map((t) => t.discNo)).size > 1;
+  // phones leave out the artist column when it would say the same thing on every row
+  el.songTable.classList.toggle("one-artist", state.artist !== null && state.artist !== FAV_KEY);
   fillSongs(tracks, { multiDisc, hideAlbum: state.album !== null, title: "Songs" });
 }
 
@@ -580,16 +598,16 @@ document.addEventListener("visibilitychange", () => {
 
 function startPlayback() {
   fadeId++;
-  audio.volume = prefs.fade ? 0 : baseVolume;
+  audio.volume = fades() ? 0 : baseVolume;
   audio.play()
-    .then(() => prefs.fade && fadeTo(baseVolume, 300))
+    .then(() => fades() && fadeTo(baseVolume, 300))
     .catch(() => (audio.volume = baseVolume));
 }
 
 let pausing = false;
 async function pausePlayback() {
   pausing = true;
-  const faded = !prefs.fade || (await fadeTo(0, 180));
+  const faded = !fades() || (await fadeTo(0, 180));
   pausing = false;
   if (!faded) return; // cancelled by a play in the meantime
   audio.pause();
@@ -912,7 +930,10 @@ el.artistList.addEventListener("click", (e) => {
   const li = e.target.closest("li");
   if (!li) return;
   if (state.source === "sc") {
-    if (li.dataset.key) scSelect(li.dataset.key);
+    if (li.dataset.key) {
+      scSelect(li.dataset.key);
+      showPane("songs");
+    }
     return;
   }
   if (state.source === "slsk") {
@@ -923,17 +944,20 @@ el.artistList.addEventListener("click", (e) => {
   state.album = null;
   for (const x of el.artistList.children) x.classList.toggle("sel", x === li);
   renderAlbums();
+  showPane("albums");
 });
 el.artistList.addEventListener("dblclick", (e) => e.target.closest("li") && state.source !== "slsk" && playShown(0));
 
 el.albumGrid.addEventListener("click", (e) => {
   const card = e.target.closest(".album");
   if (!card) return;
-  // clicking the selected album again goes back to all of the artist's songs
+  // clicking the selected album again goes back to all of the artist's songs (on phones, where
+  // only the songs show after a tap, "All songs" does that)
   const key = state.albumKeys[card.dataset.i];
-  state.album = key === state.album ? null : key;
+  state.album = key === state.album && !phoneLayout() ? null : key;
   for (const x of el.albumGrid.children) x.classList.toggle("sel", x === card && state.album !== null);
   renderSongs();
+  showPane("songs");
 });
 el.albumGrid.addEventListener("dblclick", (e) => {
   const card = e.target.closest(".album");
@@ -953,21 +977,21 @@ el.songBody.addEventListener("click", (e) => {
     return;
   }
   selectRow(Number(row.dataset.i));
-  if (prefs.singleClick) playShown(Number(row.dataset.i));
+  if (tapPlays()) playShown(Number(row.dataset.i));
 });
 el.songBody.addEventListener("dblclick", (e) => {
   const row = e.target.closest("tr");
-  if (row && !prefs.singleClick) playShown(Number(row.dataset.i));
+  if (row && !tapPlays()) playShown(Number(row.dataset.i));
 });
 el.songGrid.addEventListener("click", (e) => {
   const card = e.target.closest(".album");
   if (!card) return;
   selectRow(Number(card.dataset.i));
-  if (prefs.singleClick) playShown(Number(card.dataset.i));
+  if (tapPlays()) playShown(Number(card.dataset.i));
 });
 el.songGrid.addEventListener("dblclick", (e) => {
   const card = e.target.closest(".album");
-  if (card && !prefs.singleClick) playShown(Number(card.dataset.i));
+  if (card && !tapPlays()) playShown(Number(card.dataset.i));
 });
 $("sc-view").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-view]");
@@ -1046,8 +1070,10 @@ async function syncMaximized() {
   $("win-max-icon").setAttribute("d", max ? "M3.5 1.5h7v7M1.5 3.5h7v7h-7z" : "M2 2h8v8H2z");
   $("win-max").title = max ? "Restore" : "Maximize";
 }
-appWindow.onResized(syncMaximized);
-syncMaximized();
+if (!ios) {
+  appWindow.onResized(syncMaximized);
+  syncMaximized();
+}
 
 // ---------------------------------------------------------- resume session
 
@@ -1281,6 +1307,7 @@ function jumpToCurrent(albumToo = true) {
   if (!t) return;
   if (t.sc) return jumpToScTrack(t);
   if (state.source !== "local") setSource("local");
+  showPane("songs");
   if (!state.visible.some((x) => x.path === t.path)) {
     el.search.value = ""; // the search is hiding it
     state.query = "";
@@ -1311,6 +1338,7 @@ el.nowArtist.addEventListener("click", () => jumpToCurrent(false));
 const APP_ICONS = ["yuuri", "cloud"];
 let appliedIcon = null;
 function applyAppIcon() {
+  if (ios) return; // the home screen icon is fixed
   const name = APP_ICONS.includes(prefs.appIcon) ? prefs.appIcon : APP_ICONS[0];
   if (name === appliedIcon) return;
   appliedIcon = name;
@@ -1343,14 +1371,14 @@ function applyPrefs() {
   root.setProperty("--wave-h", `${prefs.waveHeight}px`);
   if (prefs.waveform && current() && (wave.path !== current().path || wave.bins !== waveBars())) loadWaveform(current());
   else kickWave();
-  if (platform !== "linux" && blurApplied !== prefs.blur) {
+  if (platform !== "linux" && !ios && blurApplied !== prefs.blur) {
     blurApplied = prefs.blur;
     const done = prefs.blur
       ? appWindow.setEffects({ effects: ["acrylic", "underWindowBackground"], radius: 16 })
       : appWindow.clearEffects();
     done.catch(() => {});
   }
-  appWindow.setAlwaysOnTop(prefs.onTop).catch(() => {});
+  if (!ios) appWindow.setAlwaysOnTop(prefs.onTop).catch(() => {});
   highlightPlaying();
   if (!el.settings.hidden) syncSettingsUI();
 }
@@ -1457,6 +1485,7 @@ const scConnected = () => !!state.settings.soundcloud?.accessToken;
 /** Switch the panels between the local library and SoundCloud. */
 function setSource(source) {
   state.source = source;
+  showPane("artists");
   document.body.classList.toggle("sc", source === "sc");
   document.body.classList.toggle("slsk", source === "slsk");
   $("th-artist").textContent = source === "slsk" ? "Size" : "Artist";
@@ -1527,6 +1556,7 @@ function renderScSongs() {
   const list = sc.tracks.get(sc.current);
   const q = sc.filter;
   const tracks = (list || []).filter((t) => !q || [t.title, t.artist].some((s) => s.toLowerCase().includes(q)));
+  el.songTable.classList.remove("one-artist");
   fillSongs(tracks, { hideAlbum: true, title: scListName(sc.current) });
   const note = !list ? (sc.loadingKey === sc.current ? "Loading from SoundCloud…" : sc.error || "Nothing here.")
     : !tracks.length ? (q ? "No matches." : "No songs here.") : "";
@@ -1606,6 +1636,7 @@ $("sc-open-settings").addEventListener("click", () => showIntegration("sc"));
 function jumpToScTrack(t) {
   closeSettings();
   if (state.source !== "sc") setSource("sc");
+  showPane("songs");
   const sc = state.sc;
   sc.filter = "";
   el.search.value = "";
@@ -1673,8 +1704,9 @@ function renderScSettings() {
   status.className = "hint" + (connected ? " ok" : "");
   status.textContent = connected ? `Connected as ${sc.username}${ownKeys ? " (your own app)" : ""}`
     : scWaiting ? "Approve access in the browser window that opened…"
+    : ios ? "Not connected — sign in from your computer below"
     : ownKeys ? "Not connected — using your own app" : scBuiltin ? "Not connected" : "Add your Client ID and Client Secret below first.";
-  if (!scBuiltin && !ownKeys) $("sc-own").open = true;
+  if (!scBuiltin && !ownKeys && !ios) $("sc-own").open = true;
   $("sc-connect").hidden = connected || scWaiting;
   $("sc-connect").disabled = !ownKeys && !scBuiltin;
   $("sc-cancel").hidden = !scWaiting;
@@ -1720,7 +1752,118 @@ $("sc-copy-redirect").addEventListener("click", () => {
   navigator.clipboard.writeText($("sc-redirect").value || SC_DEFAULT_REDIRECT).then(() => setStatus("Redirect URI copied", 2000), () => $("sc-redirect").select());
 });
 
-listen("scan-progress",({ payload: [done, total] }) => setStatus(`Scanning… ${done} / ${total}`));
+// ----------------------------------- SoundCloud on a phone, signed in from a computer
+
+// Computer: sign in once more in the browser, and show that login as a QR code for the phone.
+const PHONE_HINT = $("sc-phone-status").textContent;
+let phoneLinking = false;
+function renderPhoneLink() {
+  $("sc-phone").hidden = phoneLinking;
+  $("sc-phone-cancel").hidden = !phoneLinking;
+  if (phoneLinking) {
+    $("sc-phone-status").className = "hint";
+    $("sc-phone-status").textContent = "Approve access in the browser window that opened…";
+  }
+}
+$("sc-phone").addEventListener("click", async () => {
+  phoneLinking = true;
+  renderPhoneLink();
+  try {
+    const link = await invoke("sc_link_phone");
+    $("sc-phone-qr").src = link.qr;
+    $("sc-phone-code").dataset.code = link.code;
+    $("sc-phone-code").hidden = false;
+    $("sc-phone-status").className = "hint ok";
+    $("sc-phone-status").textContent = "Ready — scan the code with your phone.";
+  } catch (e) {
+    $("sc-phone-status").className = String(e) === "Cancelled" ? "hint" : "hint err";
+    $("sc-phone-status").textContent = String(e) === "Cancelled" ? PHONE_HINT : String(e);
+  } finally {
+    phoneLinking = false;
+    renderPhoneLink();
+  }
+});
+$("sc-phone-cancel").addEventListener("click", () => invoke("sc_cancel"));
+$("sc-phone-copy").addEventListener("click", () => copyText($("sc-phone-code").dataset.code, "Code copied — paste it in yuuricloud on your phone"));
+$("sc-phone-done").addEventListener("click", () => {
+  // the code is a login: don't leave it lying around
+  $("sc-phone-code").hidden = true;
+  $("sc-phone-qr").removeAttribute("src");
+  delete $("sc-phone-code").dataset.code;
+  $("sc-phone-status").className = "hint";
+  $("sc-phone-status").textContent = PHONE_HINT;
+});
+
+// Phone: take the code, pasted here or from the camera opening a yuuricloud:// link.
+function scLinked() {
+  scReset();
+  renderIntegrations();
+  setStatus(`Signed in to SoundCloud as ${state.settings.soundcloud.username || "you"}`, 4000);
+  if (state.source === "sc") setSource("sc");
+}
+$("sc-link").addEventListener("click", async () => {
+  try {
+    state.settings = await invoke("sc_link", { code: $("sc-link-code").value });
+    $("sc-link-code").value = "";
+    scLinked();
+  } catch (e) {
+    scError(e);
+  }
+});
+listen("sc-linked", ({ payload }) => {
+  state.settings = payload;
+  scLinked();
+});
+listen("sc-link-failed", ({ payload }) => setStatus(String(payload), 6000));
+
+// ------------------------------------------------------------- phone layout
+
+/** Phones show one panel at a time: artists (or SoundCloud lists), then albums, then songs. */
+const phoneQuery = matchMedia("(max-width: 700px)");
+const phoneLayout = () => ios && phoneQuery.matches;
+function showPane(pane) {
+  document.body.dataset.pane = pane;
+}
+showPane("artists");
+$("albums-back").addEventListener("click", () => showPane("artists"));
+$("songs-back").addEventListener("click", () => showPane(state.source === "local" ? "albums" : "artists"));
+$("albums-all").addEventListener("click", () => {
+  state.album = null;
+  for (const x of el.albumGrid.children) x.classList.remove("sel");
+  renderSongs();
+  showPane("songs");
+});
+
+if (ios) {
+  // Music copied in with the Files app or Finder shows up when you come back to the app.
+  document.addEventListener("visibilitychange", () => !document.hidden && sessionReady && rescan(false, true));
+
+  // Hold a song (or a SoundCloud list) for the menu a right-click opens on a computer.
+  let press = null;
+  document.addEventListener("touchstart", (e) => {
+    clearTimeout(press?.timer);
+    press = null;
+    const target = e.touches.length === 1 && e.target.closest("tr[data-i], .album[data-i], #artist-list li[data-key]");
+    if (!target) return;
+    const { clientX: x, clientY: y } = e.touches[0];
+    press = { x, y, fired: false };
+    press.timer = setTimeout(() => {
+      press.fired = true;
+      target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    }, 500);
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    const t = e.touches[0];
+    if (press && Math.hypot(t.clientX - press.x, t.clientY - press.y) > 10) clearTimeout(press.timer);
+  }, { passive: true });
+  document.addEventListener("touchend", (e) => {
+    clearTimeout(press?.timer);
+    if (press?.fired) e.preventDefault(); // the menu is open: lifting the finger isn't a tap
+    press = null;
+  });
+}
+
+listen("scan-progress",({ payload: [done, total] }) => !quietScan && setStatus(`Scanning… ${done} / ${total}`));
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
 setNowCover("", "");
@@ -1738,6 +1881,7 @@ document.documentElement.appendChild(ctx);
  */
 let appliedScale = 1;
 function applyInterfaceSize() {
+  if (ios) return; // pinch-free fixed size; the system text size applies instead
   const scale = Number(prefs.scale) || 1;
   if (scale === appliedScale) return;
   appliedScale = scale;
@@ -1782,17 +1926,21 @@ function songMenu(t, i) {
       { label: liked ? "Unlike on SoundCloud" : "Like on SoundCloud", icon: liked ? "i-heart" : "i-heart-outline", on: liked, action: () => scToggleLike(t) },
       { label: "Open in browser", icon: "i-globe", disabled: !t.permalinkUrl, action: () => window.__TAURI__.opener.openUrl(t.permalinkUrl.split("?")[0]) },
       { label: "Copy link", icon: "i-link", disabled: !t.permalinkUrl, action: () => copyText(t.permalinkUrl.split("?")[0], "Link copied") },
-      "-",
-      canDownload(t)
-        ? { label: t.downloadable ? "Download" : "Download with yt-dlp", icon: "i-download", action: () => queueDownloads([t]) }
-        : { label: "Download (not allowed by the artist)", icon: "i-download", disabled: true },
     );
+    if (!ios) {
+      items.push(
+        "-",
+        canDownload(t)
+          ? { label: t.downloadable ? "Download" : "Download with yt-dlp", icon: "i-download", action: () => queueDownloads([t]) }
+          : { label: "Download (not allowed by the artist)", icon: "i-download", disabled: true },
+      );
+    }
     if (dl.current) items.push({ label: "Pause downloads", icon: "i-stop", action: stopDownloads });
   } else {
     const fav = state.favorites.has(t.path);
     items.push(
       { label: fav ? "Remove from favourites" : "Add to favourites", icon: fav ? "i-heart" : "i-heart-outline", on: fav, action: () => toggleFavorite(t) },
-      { label: "Open file location", icon: "i-folder", action: () => invoke("reveal_file", { path: t.path }).catch((e) => setStatus(String(e), 5000)) },
+      ...(ios ? [] : [{ label: "Open file location", icon: "i-folder", action: () => invoke("reveal_file", { path: t.path }).catch((e) => setStatus(String(e), 5000)) }]),
       "-",
       { label: "Edit song info…", icon: "i-edit", action: () => openEditor(t) },
     );
@@ -1994,9 +2142,12 @@ el.artistList.addEventListener("contextmenu", async (e) => {
   const items = [
     { label: "Play all", icon: "i-play", action: async () => {
       scSelect(key);
+      showPane("songs");
       if (!state.sc.tracks.has(key)) await scFetch(key);
       playShown(0);
     } },
+  ];
+  if (!ios) items.push(
     "-",
     { label: loaded ? `Download all (${loaded.filter(canDownload).length} of ${loaded.length})` : "Download all", icon: "i-download",
       action: async () => {
@@ -2006,7 +2157,7 @@ el.artistList.addEventListener("contextmenu", async (e) => {
         }
         queueDownloads(state.sc.tracks.get(key) || []);
       } },
-  ];
+  );
   if (dl.current) items.push({ label: "Pause downloads", icon: "i-stop", action: stopDownloads });
   openMenu(e.clientX, e.clientY, scListName(key), items);
 });

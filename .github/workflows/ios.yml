@@ -1,0 +1,73 @@
+# Builds yuuricloud for iPhone and iPad as an unsigned .ipa. AltStore or SideStore sign it with your
+# own Apple ID when they install it. The release workflow runs this and attaches the .ipa to the
+# release; run it by hand from the Actions tab to get the .ipa as a download on the run's page.
+name: iOS
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: Attach the .ipa to the release of this version
+        type: boolean
+        default: false
+  push:
+    branches: [claude/code-scan-review-commits-5y4qsr]
+
+permissions:
+  contents: write
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ios
+
+      - run: npm ci
+
+      # Tauri makes the Xcode project with xcodegen
+      - run: brew install xcodegen
+
+      - name: Create the Xcode project
+        run: npm run tauri ios init -- --ci
+
+      # iOS icons can't be see-through, so the corners get the app's background color
+      - name: App icon
+        run: npm run tauri icon -- icon.png --ios-color "#101218"
+
+      - name: Build
+        run: npm run tauri ios build -- --ci --no-sign
+
+      - name: Name the .ipa
+        id: ipa
+        run: |
+          version="$(jq -r .version src-tauri/tauri.conf.json)"
+          file="yuuricloud_${version}_iOS-unsigned.ipa"
+          cp "$(find src-tauri/gen/apple/build -name '*.ipa' | head -n 1)" "$file"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: ${{ steps.ipa.outputs.file }}
+
+      - name: Attach to the release
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FILE: ${{ steps.ipa.outputs.file }}
+        run: gh release upload "v$(jq -r .version src-tauri/tauri.conf.json)" "$FILE" --clobber --repo "${{ github.repository }}"

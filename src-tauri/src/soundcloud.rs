@@ -259,6 +259,49 @@ pub fn connect(cfg: &ScConfig, open_url: impl Fn(&str) -> Result<(), String>, ca
     Ok(cfg)
 }
 
+// ------------------------------------------------------- signing in a phone
+
+/// What a link code starts with. A phone camera opens the app with it; the app also takes the code
+/// pasted in.
+const LINK_PREFIX: &str = "yuuricloud://soundcloud/";
+
+/// A login for another device, as text: the app's keys (the secret only for the user's own app) and
+/// tokens of a sign-in made just for that device. The computer's own login isn't in it, so the two
+/// never refresh each other's tokens away.
+pub fn link_code(phone: &ScConfig) -> Result<String, String> {
+    use base64::Engine;
+    let json = serde_json::to_vec(phone).map_err(|e| e.to_string())?;
+    Ok(format!("{LINK_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
+}
+
+/// Read a link code, with or without the `yuuricloud://soundcloud/` in front.
+pub fn from_link_code(text: &str) -> Result<ScConfig, String> {
+    use base64::Engine;
+    let bad = || "That isn't a yuuricloud link code — copy the whole code from the computer".to_string();
+    let text = text.trim();
+    let code = text.strip_prefix(LINK_PREFIX).unwrap_or(text).trim_end_matches('/');
+    let json = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(code).map_err(|_| bad())?;
+    let cfg: ScConfig = serde_json::from_slice(&json).map_err(|_| bad())?;
+    if cfg.refresh_token.is_empty() {
+        return Err(bad());
+    }
+    Ok(cfg)
+}
+
+/// A QR code of `text`, as an SVG `data:` URL the webview can show.
+pub fn qr_svg(text: &str) -> Result<String, String> {
+    use base64::Engine;
+    use qrcode::render::svg;
+    let svg = qrcode::QrCode::new(text.as_bytes())
+        .map_err(|e| e.to_string())?
+        .render::<svg::Color>()
+        .min_dimensions(260, 260)
+        .dark_color(svg::Color("#000000"))
+        .light_color(svg::Color("#ffffff"))
+        .build();
+    Ok(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(svg)))
+}
+
 /// Split a redirect URI into (host, port, path). Only http on this computer can be listened on.
 fn parse_redirect(uri: &str) -> Result<(String, u16, String), String> {
     let bad = || format!("The redirect URI must look like {DEFAULT_REDIRECT_URI} (http, 127.0.0.1 or localhost, a port and a path)");
@@ -800,6 +843,20 @@ mod tests {
         assert_eq!(parse_redirect("http://localhost:9000").unwrap(), ("localhost".into(), 9000, "/".into()));
         assert!(parse_redirect("https://example.com/cb").is_err());
         assert!(parse_redirect("http://127.0.0.1/cb").is_err());
+    }
+
+    #[test]
+    fn link_codes_round_trip() {
+        let phone = ScConfig { access_token: "a".into(), refresh_token: "r".into(), expires_at: 5, username: "me".into(), ..Default::default() };
+        let code = link_code(&phone).unwrap();
+        assert!(code.starts_with("yuuricloud://soundcloud/"));
+        for text in [code.clone(), code.trim_start_matches("yuuricloud://soundcloud/").to_string(), format!("  {code}\n")] {
+            let back = from_link_code(&text).unwrap();
+            assert_eq!((back.refresh_token.as_str(), back.username.as_str(), back.expires_at), ("r", "me", 5));
+        }
+        assert!(from_link_code("hello").is_err());
+        assert!(from_link_code(&link_code(&ScConfig::default()).unwrap()).is_err());
+        assert!(qr_svg(&code).unwrap().starts_with("data:image/svg+xml;base64,"));
     }
 
     #[test]

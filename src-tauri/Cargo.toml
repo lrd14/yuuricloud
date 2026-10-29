@@ -4,6 +4,12 @@ version = "0.3.0"
 description = "A small local music player"
 edition = "2021"
 
+[lib]
+# iOS builds link the app as a static library; the `_lib` suffix keeps it from clashing with the
+# desktop binary's name on Windows.
+name = "yuuricloud_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -26,6 +32,11 @@ getrandom = "0.3"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 base64 = "0.22"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
+# Opens the app from the QR code a computer shows to sign this phone in to SoundCloud.
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+tauri-plugin-deep-link = "2"
 
 
 [target.'cfg(windows)'.dependencies]

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>yuuricloud</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -54,13 +54,15 @@
 
     <section id="empty" class="empty" hidden>
       <svg viewBox="0 0 24 24"><use href="#i-note" /></svg>
-      <p>Your library is empty.<br />Add a folder with your music to get started. Songs you download from<br />SoundCloud or Soulseek show up here on their own.</p>
-      <button id="empty-add" class="btn accent">Add music folder</button>
+      <p class="desktop-only">Your library is empty.<br />Add a folder with your music to get started. Songs you download from<br />SoundCloud or Soulseek show up here on their own.</p>
+      <p class="ios-only">Your library is empty.<br />Copy music into yuuricloud's folder: in the Files app it's under<br /><b>On My iPhone → yuuricloud</b>. From a computer, drag it onto yuuricloud<br />in the iPhone's Files tab in Finder (or the Apple Devices app on Windows).</p>
+      <button id="empty-add" class="btn accent desktop-only">Add music folder</button>
     </section>
 
     <section id="sc-empty" class="empty" hidden>
       <svg viewBox="0 0 24 24"><use href="#i-cloud" /></svg>
-      <p>Connect your SoundCloud account to play your likes and playlists here.</p>
+      <p class="desktop-only">Connect your SoundCloud account to play your likes and playlists here.</p>
+      <p class="ios-only">Sign in from yuuricloud on your computer to play your SoundCloud likes and playlists here.</p>
       <button id="sc-open-settings" class="btn accent">Set up SoundCloud</button>
     </section>
 
@@ -164,11 +166,16 @@
       </aside>
       <section class="right">
         <section class="panel albums">
-          <h2 id="albums-title">Albums</h2>
+          <div class="panel-head">
+            <button id="albums-back" class="icon-btn back" title="Back to artists"><svg viewBox="0 0 24 24"><use href="#i-back" /></svg></button>
+            <h2 id="albums-title">Albums</h2>
+            <button id="albums-all" class="btn small phone-only">All songs</button>
+          </div>
           <div id="album-grid" class="grid"></div>
         </section>
         <section class="panel songs">
           <div class="panel-head">
+            <button id="songs-back" class="icon-btn back" title="Back"><svg viewBox="0 0 24 24"><use href="#i-back" /></svg></button>
             <h2 id="songs-title">Songs</h2>
             <label class="slsk-sort">Sort by
               <select id="slsk-sort">
@@ -250,7 +257,7 @@
 
         <div class="settings-body">
           <div class="tab" data-tab="appearance">
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">App icon</div><div class="hint">Shown in the title bar and on the taskbar while the app is open.</div></div>
               <div class="icon-choices">
                 <button class="icon-choice" data-icon="yuuri" title="Yuuri"><img src="icons/app-yuuri.png" alt="Yuuri" /></button>
@@ -269,11 +276,11 @@
               <div><div class="label">Tint the background too</div><div class="hint">Give the whole window a faint wash of the accent color.</div></div>
               <label class="switch"><input type="checkbox" data-pref="coverTint" /><span></span></label>
             </div>
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">Background blur</div><div class="hint">Blur whatever is behind the window. Not available on Linux.</div></div>
               <label class="switch"><input type="checkbox" data-pref="blur" /><span></span></label>
             </div>
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">Background darkness</div><div class="hint">Lower lets more of the desktop show through.</div></div>
               <input type="range" class="range pref-range" data-pref="tint" min="0.15" max="0.98" step="0.01" />
             </div>
@@ -283,7 +290,7 @@
                 <button data-value="small">Small</button><button data-value="medium">Medium</button><button data-value="large">Large</button>
               </div>
             </div>
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">Interface size</div></div>
               <div class="segmented" data-pref="scale">
                 <button data-value="0.9">90%</button><button data-value="1">100%</button><button data-value="1.1">110%</button><button data-value="1.25">125%</button>
@@ -297,7 +304,7 @@
               <div><div class="label">Show artist song counts</div></div>
               <label class="switch"><input type="checkbox" data-pref="showCounts" /><span></span></label>
             </div>
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">Keep window on top</div></div>
               <label class="switch"><input type="checkbox" data-pref="onTop" /><span></span></label>
             </div>
@@ -340,7 +347,7 @@
               <div><div class="label">Playing indicator</div><div class="hint">Animated bars next to the song that's playing.</div></div>
               <label class="switch"><input type="checkbox" data-pref="equalizer" /><span></span></label>
             </div>
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">Hover effects</div><div class="hint">Album covers lift when you point at them.</div></div>
               <label class="switch"><input type="checkbox" data-pref="hoverLift" /><span></span></label>
             </div>
@@ -348,9 +355,14 @@
 
           <div class="tab" data-tab="library" hidden>
             <div class="label">Music folders</div>
-            <div class="hint">Your SoundCloud and Soulseek download folders are always included.</div>
+            <div class="hint desktop-only">Your SoundCloud and Soulseek download folders are always included.</div>
+            <div class="hint ios-only">
+              yuuricloud plays the music in its own folder. Copy songs into it in the Files app (On My iPhone →
+              yuuricloud), or from a computer: drag them onto yuuricloud in the iPhone's Files tab in Finder, or in the
+              Apple Devices app on Windows. New songs show up when you come back to the app.
+            </div>
             <ul id="folder-list" class="folder-list"></ul>
-            <button id="settings-add-folder" class="btn">Add folder…</button>
+            <button id="settings-add-folder" class="btn desktop-only">Add folder…</button>
             <div class="row">
               <div><div class="label">Name artists and albums from file tags</div><div class="hint">On: use the artist and album written in each song file, and only fall back to folder names when a file has none. Off: trust the folder layout (Artist/Album) first. Rescans the library.</div></div>
               <label class="switch"><input id="prefer-tags" type="checkbox" /><span></span></label>
@@ -374,11 +386,11 @@
               <div><div class="label">Resume where you left off</div><div class="hint">Reopen on the same song, position, queue and view you had when you closed the app.</div></div>
               <label class="switch"><input type="checkbox" data-pref="resume" /><span></span></label>
             </div>
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">Play songs with a single click</div><div class="hint">Otherwise double-click a song to play it.</div></div>
               <label class="switch"><input type="checkbox" data-pref="singleClick" /><span></span></label>
             </div>
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">Fade on play and pause</div><div class="hint">Ease the volume in and out instead of cutting.</div></div>
               <label class="switch"><input type="checkbox" data-pref="fade" /><span></span></label>
             </div>
@@ -396,7 +408,7 @@
                 <label class="switch" title="Check when yuuricloud starts"><input type="checkbox" data-pref="checkUpdates" /><span></span></label>
               </div>
             </div>
-            <div class="row">
+            <div class="row desktop-only">
               <div><div class="label">Setup guide</div><div class="hint">Walk through adding your music and connecting SoundCloud, Soulseek, Last.fm and Discord again.</div></div>
               <button id="run-setup" class="btn">Run setup</button>
             </div>
@@ -412,7 +424,7 @@
                 <svg viewBox="0 0 24 24"><use href="#i-cloud" /></svg>
                 <span><span class="name">SoundCloud</span><span class="state"></span></span>
               </button>
-              <button data-int="slsk" data-status="slsk-status">
+              <button data-int="slsk" data-status="slsk-status" class="desktop-only">
                 <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
                 <span><span class="name">Soulseek</span><span class="state"></span></span>
               </button>
@@ -420,7 +432,7 @@
                 <svg viewBox="0 0 24 24"><use href="#i-bars" /></svg>
                 <span><span class="name">Last.fm</span><span class="state"></span></span>
               </button>
-              <button data-int="discord" data-status="discord-status">
+              <button data-int="discord" data-status="discord-status" class="desktop-only">
                 <svg viewBox="0 0 24 24"><use href="#i-chat" /></svg>
                 <span><span class="name">Discord</span><span class="state"></span></span>
               </button>
@@ -428,72 +440,123 @@
 
             <!-- SoundCloud -->
             <section class="int-panel" data-int="sc">
-              <p class="hint">
+              <p class="hint desktop-only">
                 Play your SoundCloud likes and playlists in the SoundCloud tab. Click <b>Connect</b> and sign in with
                 your SoundCloud account in the browser.
+              </p>
+              <p class="hint ios-only">
+                Play your SoundCloud likes and playlists in the SoundCloud tab. This phone signs in through yuuricloud on
+                your computer.
               </p>
               <h4 class="group-title">Account</h4>
               <div class="group">
                 <div class="row">
                   <div><div class="label">SoundCloud account</div><div id="sc-status" class="hint">Not connected</div></div>
                   <div class="actions">
-                    <button id="sc-connect" class="btn">Connect</button>
+                    <button id="sc-connect" class="btn desktop-only">Connect</button>
                     <button id="sc-cancel" class="btn" hidden>Cancel</button>
                     <button id="sc-disconnect" class="btn danger" hidden>Disconnect</button>
                   </div>
                 </div>
               </div>
 
-              <h4 class="group-title">Downloads</h4>
-              <div class="group">
-                <div class="row">
-                  <div><div class="label">Download folder</div><div id="dl-folder" class="hint path"></div></div>
-                  <div class="actions">
-                    <button id="dl-open" class="btn">Open</button>
-                    <button id="dl-change" class="btn">Change…</button>
-                  </div>
-                </div>
-                <div class="row">
-                  <div>
-                    <div class="label">Use yt-dlp for other songs</div>
-                    <div class="hint">
-                      Songs whose artist allows downloads are saved straight from SoundCloud. Any other song needs
-                      <a href="#" data-open="https://github.com/yt-dlp/yt-dlp#installation">yt-dlp</a>. Saving songs the
-                      artist hasn't made downloadable is against SoundCloud's terms, so it's off unless you turn it on.
-                    </div>
-                  </div>
-                  <label class="switch"><input id="dl-ytdlp" type="checkbox" /><span></span></label>
-                </div>
-                <div id="dl-ytdlp-fields" class="fields">
-                  <label>yt-dlp program (leave empty if it's on your PATH)<input id="dl-ytdlp-path" type="text" spellcheck="false" autocomplete="off" placeholder="yt-dlp" /></label>
-                  <button id="dl-ytdlp-check" class="btn">Check</button>
-                  <button id="dl-ytdlp-get" class="btn">Download for me</button>
-                </div>
-                <div id="dl-ytdlp-status" class="hint group-status"></div>
-              </div>
-
-              <h4 class="group-title">Advanced</h4>
-              <div class="group">
-                <details id="sc-own" class="own-app">
-                  <summary>Use your own SoundCloud app</summary>
-                  <p class="hint">
-                    Optional. Registering an app needs an <b>Artist Pro</b> subscription:
-                    <a href="#" data-open="https://soundcloud.com/you/apps">your apps</a>. Paste its Client ID and Client
-                    Secret below. The redirect URI here must be <b>exactly</b> the one saved in your SoundCloud app; if
-                    SoundCloud's sign-in page stays blank, they don't match. It has to be <code>http://127.0.0.1:</code> or
-                    <code>http://localhost:</code> with a port and a path. Clear both keys and save to go back to the
-                    built-in app.
+              <div class="ios-only">
+                <h4 class="group-title">Sign in from your computer</h4>
+                <div class="group">
+                  <p class="hint phone-steps">
+                    On your computer, open yuuricloud → Settings → Integrations → SoundCloud and click <b>Link phone…</b>.
+                    Then point this iPhone's camera at the code it shows and tap <b>Open in yuuricloud</b>. Or copy the
+                    code on the computer and paste it here.
                   </p>
                   <div class="fields">
-                    <label>Redirect URI<input id="sc-redirect" type="text" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8974/callback" /></label>
-                    <button id="sc-copy-redirect" class="btn">Copy</button>
+                    <label>Link code<input id="sc-link-code" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="yuuricloud://soundcloud/…" /></label>
+                    <button id="sc-link" class="btn">Link</button>
                   </div>
-                  <div class="fields">
-                    <label>Client ID<input id="sc-id" type="text" spellcheck="false" autocomplete="off" /></label>
-                    <label>Client Secret<input id="sc-secret" type="password" spellcheck="false" autocomplete="off" /></label>
-                    <button id="sc-save" class="btn">Save keys</button>
+                </div>
+              </div>
+
+              <div class="desktop-only">
+                <h4 class="group-title">Your phone</h4>
+                <div class="group">
+                  <div class="row">
+                    <div>
+                      <div class="label">Use SoundCloud on your iPhone</div>
+                      <div id="sc-phone-status" class="hint">Sign in once more in the browser, then scan the code with the iPhone's camera. The phone gets a login of its own; this computer stays signed in.</div>
+                    </div>
+                    <div class="actions">
+                      <button id="sc-phone" class="btn">Link phone…</button>
+                      <button id="sc-phone-cancel" class="btn" hidden>Cancel</button>
+                    </div>
                   </div>
-                </details>
+                  <div id="sc-phone-code" class="phone-code" hidden>
+                    <img id="sc-phone-qr" alt="QR code that signs the phone in" />
+                    <div>
+                      <p class="hint">
+                        Point the iPhone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
+                        it in yuuricloud on the phone, under Settings → Integrations → SoundCloud.
+                      </p>
+                      <p class="hint">Anyone with this code can use your SoundCloud account, so don't share it.</p>
+                      <div class="actions">
+                        <button id="sc-phone-copy" class="btn">Copy code</button>
+                        <button id="sc-phone-done" class="btn">Done</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="desktop-only">
+                <h4 class="group-title">Downloads</h4>
+                <div class="group">
+                  <div class="row">
+                    <div><div class="label">Download folder</div><div id="dl-folder" class="hint path"></div></div>
+                    <div class="actions">
+                      <button id="dl-open" class="btn">Open</button>
+                      <button id="dl-change" class="btn">Change…</button>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div>
+                      <div class="label">Use yt-dlp for other songs</div>
+                      <div class="hint">
+                        Songs whose artist allows downloads are saved straight from SoundCloud. Any other song needs
+                        <a href="#" data-open="https://github.com/yt-dlp/yt-dlp#installation">yt-dlp</a>. Saving songs the
+                        artist hasn't made downloadable is against SoundCloud's terms, so it's off unless you turn it on.
+                      </div>
+                    </div>
+                    <label class="switch"><input id="dl-ytdlp" type="checkbox" /><span></span></label>
+                  </div>
+                  <div id="dl-ytdlp-fields" class="fields">
+                    <label>yt-dlp program (leave empty if it's on your PATH)<input id="dl-ytdlp-path" type="text" spellcheck="false" autocomplete="off" placeholder="yt-dlp" /></label>
+                    <button id="dl-ytdlp-check" class="btn">Check</button>
+                    <button id="dl-ytdlp-get" class="btn">Download for me</button>
+                  </div>
+                  <div id="dl-ytdlp-status" class="hint group-status"></div>
+                </div>
+
+                <h4 class="group-title">Advanced</h4>
+                <div class="group">
+                  <details id="sc-own" class="own-app">
+                    <summary>Use your own SoundCloud app</summary>
+                    <p class="hint">
+                      Optional. Registering an app needs an <b>Artist Pro</b> subscription:
+                      <a href="#" data-open="https://soundcloud.com/you/apps">your apps</a>. Paste its Client ID and Client
+                      Secret below. The redirect URI here must be <b>exactly</b> the one saved in your SoundCloud app; if
+                      SoundCloud's sign-in page stays blank, they don't match. It has to be <code>http://127.0.0.1:</code> or
+                      <code>http://localhost:</code> with a port and a path. Clear both keys and save to go back to the
+                      built-in app.
+                    </p>
+                    <div class="fields">
+                      <label>Redirect URI<input id="sc-redirect" type="text" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8974/callback" /></label>
+                      <button id="sc-copy-redirect" class="btn">Copy</button>
+                    </div>
+                    <div class="fields">
+                      <label>Client ID<input id="sc-id" type="text" spellcheck="false" autocomplete="off" /></label>
+                      <label>Client Secret<input id="sc-secret" type="password" spellcheck="false" autocomplete="off" /></label>
+                      <button id="sc-save" class="btn">Save keys</button>
+                    </div>
+                  </details>
+                </div>
               </div>
             </section>
 
@@ -750,6 +813,7 @@
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M5 20h14v-2H5zM19 9h-4V3H9v6H5l7 7z" /></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></symbol>
     <symbol id="i-to-top" viewBox="0 0 24 24"><path d="M5 4h14v2H5zm7 4-6 6h4v6h4v-6h4z" /></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" /></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" /></symbol>
   </svg>
   <script src="main.js"></script>

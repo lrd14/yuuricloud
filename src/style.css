@@ -688,3 +688,78 @@ tr.slsk-group.closed .caret { transform: rotate(-90deg); }
 .editor-foot .spacer { flex: 1; }
 .editor-foot .err { max-width: 60%; }
 @media (max-width: 620px) { .editor-body { grid-template-columns: 1fr; } .editor-cover { align-items: center; } }
+
+/* Phone link: the QR code the computer shows for the phone's camera */
+.phone-code { display: flex; gap: 16px; align-items: center; padding: 4px 0 14px; }
+.phone-code img { width: 168px; height: 168px; flex: none; border-radius: 10px; background: #fff; padding: 8px; image-rendering: pixelated; }
+.phone-code .hint { margin: 0 0 8px; line-height: 1.45; }
+.phone-steps { margin: 12px 0 0; line-height: 1.5; }
+
+/* -------------------------------------------------------------- iPhone and iPad */
+.back, .phone-only { display: none !important; }
+body:not(.ios) .ios-only { display: none !important; }
+body.ios .desktop-only, body.ios .win-controls, body.ios #downloads-btn, body.ios .search kbd, body.ios #add-folder,
+body.ios #source [data-source="slsk"], body.ios .volume, body.ios .local-hint { display: none !important; }
+/* no see-through window here: a solid background, edge to edge, clear of the notch and home bar */
+html.ios, html.ios body { background: #101218; }
+body.ios {
+  --tint: rgb(16, 18, 24);
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+}
+body.ios.cover-tint { --tint: color-mix(in srgb, var(--accent-base) 14%, rgb(16, 18, 24)); }
+body.ios #app {
+  border: none; border-radius: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+body.ios .titlebar { padding: 0 12px; }
+body.ios .player { grid-template-columns: minmax(200px, 360px) 1fr; }
+body.ios .range::-webkit-slider-thumb { opacity: 1; }
+/* iOS zooms in on inputs with text under 16px */
+body.ios input, body.ios select { font-size: 16px; }
+body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-top) - env(safe-area-inset-bottom))); }
+
+@media (max-width: 700px) {
+  /* title bar: logo, sources and settings on top, search underneath */
+  body.ios .titlebar { flex-wrap: wrap; height: auto; padding: 8px 12px; row-gap: 8px; }
+  body.ios .brand { width: auto; margin: 0; }
+  body.ios .brand span { display: none; }
+  body.ios .source-switch { margin: 0 auto 0 0; }
+  body.ios .titlebar .search { order: 10; flex: 1 1 100%; max-width: none; margin: 0; }
+  body.ios .search input { padding: 8px 0; }
+
+  /* one panel at a time: artists (or SoundCloud lists) → albums → songs */
+  body.ios #library { grid-template-columns: minmax(0, 1fr); }
+  body.ios .right { grid-template-rows: minmax(0, 1fr); }
+  body.ios[data-pane="artists"] .right,
+  body.ios[data-pane="albums"] .panel.artists, body.ios[data-pane="albums"] .panel.songs,
+  body.ios[data-pane="songs"] .panel.artists, body.ios[data-pane="songs"] .panel.albums { display: none; }
+  body.ios .back, body.ios .phone-only { display: grid !important; }
+  body.ios .panel-head { padding-left: 6px; }
+  body.ios .panel-head .back { width: 32px; height: 32px; margin-top: 6px; }
+  body.ios .panel-head .back + h2 { padding-left: 2px; }
+  body.ios .panel-head .phone-only { margin-top: 6px; }
+  body.ios { --cover-min: 132px; }
+  body.ios .list li { padding: 11px 12px; font-size: 15px; }
+  body.ios td { padding-top: 10px; padding-bottom: 10px; font-size: 14.5px; }
+  body.ios th.num, body.ios td.num { width: 34px; }
+  body.ios th.time, body.ios td.time { width: 54px; padding-right: 10px; }
+  body.ios .col-album, body.ios table.one-artist #th-artist, body.ios table.one-artist td:nth-child(3) { display: none; }
+
+  /* player: song on top, buttons and seek bar below */
+  body.ios .player { grid-template-columns: minmax(0, 1fr); height: auto; gap: 6px; padding: 10px 12px 8px; }
+  body.ios .now .cover.small { width: 46px; height: 46px; }
+  body.ios .buttons { gap: 22px; }
+  body.ios .status { left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 176px); text-align: center; }
+
+  /* settings fill the screen */
+  body.ios .settings-backdrop { place-items: stretch; }
+  body.ios .settings, body.ios .settings.editor {
+    width: 100%; height: 100%; max-height: none; border-radius: 0; border: none;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  body.ios .settings-tabs { overflow-x: auto; padding: 0 12px 10px; }
+  body.ios .settings-body { padding: 8px 16px 22px; }
+  body.ios .row { gap: 14px; }
+  body.ios .pref-range { flex-basis: 110px; }
+  body.ios .phone-code { flex-direction: column; align-items: flex-start; }
+}
