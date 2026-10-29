@@ -17,15 +17,16 @@ permissions:
 
 jobs:
   ios:
-    runs-on: macos-latest
+    # GitHub's Xcode 27 machine (a preview for now): its Xcode 27.1 has the iPhone Duo's SDK
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 
-      # The newest Xcode on the runner. Built with the iOS 27.1 SDK (Xcode 27.1), the app fills the
-      # iPhone Duo's screens edge to edge instead of keeping to the space beside the status bar.
+      # Built with the iOS 27.1 SDK (Xcode 27.1), the app fills the iPhone Duo's screens edge to
+      # edge instead of keeping to the space beside the status bar.
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: '27.1'
 
       - uses: actions/setup-node@v4
         with:
