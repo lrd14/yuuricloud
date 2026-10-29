@@ -289,7 +289,7 @@ fn folder_cover(dir: &Path, cache: &mut HashMap<PathBuf, Option<PathBuf>>) -> Op
         .map(|rd| {
             rd.flatten()
                 .map(|e| e.path())
-                .filter(|p| p.is_file() && has_ext(p, IMAGE_EXTS))
+                .filter(|p| p.is_file() && has_ext(p, IMAGE_EXTS) && !is_hidden(p))
                 .collect()
         })
         .unwrap_or_default();
@@ -301,6 +301,20 @@ fn folder_cover(dir: &Path, cache: &mut HashMap<PathBuf, Option<PathBuf>>) -> Op
         .or_else(|| if images.len() == 1 { images.first().cloned() } else { None });
     cache.insert(dir.to_path_buf(), found.clone());
     found
+}
+
+/// Hidden or system files: Windows Media Player writes a hidden Folder.jpg / AlbumArtSmall.jpg
+/// into music folders and overwrites it with whatever it showed last, so it isn't a real cover.
+fn is_hidden(p: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const HIDDEN_OR_SYSTEM: u32 = 0x2 | 0x4;
+        if fs::metadata(p).is_ok_and(|m| m.file_attributes() & HIDDEN_OR_SYSTEM != 0) {
+            return true;
+        }
+    }
+    p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
 }
 
 pub fn hash_hex(s: &str) -> String {
@@ -320,6 +334,17 @@ fn assign_covers(tracks: &mut [Track], cover_dir: &Path) {
         albums.entry(t.album_key()).or_default().push(i);
     }
 
+    // A folder's picture is only an album's cover when the folder holds just that album. Folders
+    // of loose songs (like the SoundCloud download folder) would otherwise give every song the
+    // same picture; those songs keep their own embedded art instead.
+    let mut dir_albums: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+    for t in tracks.iter() {
+        if let Some(d) = Path::new(&t.path).parent() {
+            dir_albums.entry(d.to_path_buf()).or_default().insert(t.album_key());
+        }
+    }
+    let one_album = |d: &Path| dir_albums.get(d).is_none_or(|a| a.len() <= 1);
+
     let mut dir_cache = HashMap::new();
     for idx in albums.into_values() {
         let mut dirs: Vec<PathBuf> = Vec::new();
@@ -337,7 +362,7 @@ fn assign_covers(tracks: &mut [Track], cover_dir: &Path) {
             }
         }
 
-        let mut cover = dirs.iter().find_map(|d| folder_cover(d, &mut dir_cache));
+        let mut cover = dirs.iter().filter(|d| one_album(d)).find_map(|d| folder_cover(d, &mut dir_cache));
         if cover.is_none() {
             // Cache embedded art per source file (and its mtime), not per album: albums get
             // regrouped when tags change, and a stale album entry would show another song's art.
@@ -543,6 +568,31 @@ mod tests {
         let i = info("Some Artist - Single Song.mp3");
         assert_eq!((i.artist.as_deref(), i.title.as_str()), (Some("Some Artist"), "Single Song"));
         assert!(!i.strong);
+    }
+
+    #[test]
+    fn folder_pictures_only_cover_single_album_folders() {
+        let base = std::env::temp_dir().join(format!("yuuricloud-covers-{}", std::process::id()));
+        let (mixed, album, covers) = (base.join("mixed"), base.join("album"), base.join("covers"));
+        for d in [&mixed, &album] {
+            fs::create_dir_all(d).unwrap();
+            fs::write(d.join("folder.jpg"), b"not really a jpeg").unwrap();
+        }
+        let p = |d: &Path, f: &str| d.join(f).to_string_lossy().into_owned();
+        let mut tracks = vec![
+            loose(&p(&mixed, "a.mp3"), "A", "Song A"),
+            loose(&p(&mixed, "b.mp3"), "B", "Song B"),
+            loose(&p(&album, "1.mp3"), "C", "Album"),
+            loose(&p(&album, "2.mp3"), "C", "Album"),
+        ];
+        assign_covers(&mut tracks, &covers);
+        // two different songs in one folder: the folder's picture is no one's cover
+        assert_eq!(tracks[0].cover, "");
+        assert_eq!(tracks[1].cover, "");
+        // one album in its own folder: it is
+        assert_eq!(tracks[2].cover, p(&album, "folder.jpg"));
+        assert_eq!(tracks[3].cover, tracks[2].cover);
+        let _ = fs::remove_dir_all(&base);
     }
 
     fn loose(path: &str, artist: &str, album: &str) -> Track {
