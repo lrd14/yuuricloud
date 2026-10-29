@@ -763,3 +763,11 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
   body.ios .pref-range { flex-basis: 110px; }
   body.ios .phone-code { flex-direction: column; align-items: flex-start; }
 }
+
+/* Small tablets and an open foldable (iPhone Duo's inner screen): all three panels, made narrower */
+@media (min-width: 701px) and (max-width: 900px) {
+  body.ios #library { grid-template-columns: 180px minmax(0, 1fr); }
+  body.ios { --cover-min: 120px; }
+  body.ios .titlebar .search { min-width: 0; }
+  body.ios .player { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; }
+}
