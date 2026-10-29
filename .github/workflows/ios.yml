@@ -39,7 +39,8 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-          key: ios
+          # a new key whenever Xcode changes: cached builds remember the old Xcode's paths
+          key: ios-xcode27.2
 
       - run: npm ci
 
