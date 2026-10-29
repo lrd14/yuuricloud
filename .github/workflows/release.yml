@@ -62,6 +62,7 @@ jobs:
             - **Windows**: `yuuricloud_x.y.z_x64-setup.exe` (or the `.msi`), or `x64-portable.exe` to run without installing. Windows may show a SmartScreen warning; click **More info → Run anyway**.
             - **macOS**: `aarch64.dmg` for Apple Silicon (M1 and newer), `x64.dmg` for Intel Macs. The app isn't signed, so the first time, right-click it and choose **Open**, or run `xattr -cr /Applications/yuuricloud.app`.
             - **Linux**: `.AppImage` (any distro), `.deb` (Debian/Ubuntu) or `.rpm` (Fedora).
+            - **iPhone and iPad**: `iOS-unsigned.ipa`. Install it with [AltStore](https://altstore.io) or [SideStore](https://sidestore.io), which sign it with your Apple ID. See the README for getting music and SoundCloud onto it.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
