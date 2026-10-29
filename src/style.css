@@ -813,3 +813,13 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
   body.ios .buttons { gap: 26px; }
   body.ios .status { bottom: calc(env(viewport-segment-height 0 1) + 8px); }
 }
+
+/* iPhone Duo: the time, battery and wifi stand in a column in the top corner, and iOS reports
+   that corner as a gap across the whole top of the screen. The title bar moves up into the gap
+   and stops short of the corner, instead of leaving an empty band above it and still running
+   under the corner's lower end, where the settings button couldn't be tapped. */
+body.ios.duo #app { padding-top: 0; }
+body.ios.duo .titlebar {
+  height: auto; min-height: max(52px, env(safe-area-inset-top));
+  padding-right: calc(env(safe-area-inset-top) + 8px);
+}

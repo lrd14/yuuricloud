@@ -73,6 +73,9 @@ const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Mac/.test(navigato
 const platform = ios ? "ios" : /Mac/.test(navigator.userAgent) ? "mac" : /Linux/.test(navigator.userAgent) ? "linux" : "windows";
 document.body.classList.add(platform);
 document.documentElement.classList.add(platform);
+// The iPhone Duo's screens are nearly square, both folded and open; other iPhones are about 2:1
+const duo = /iPhone/.test(navigator.userAgent) && Math.max(screen.width, screen.height) / Math.min(screen.width, screen.height) < 1.7;
+document.body.classList.toggle("duo", duo);
 /** Touch screens play a song on the first tap; there's no double-click there. */
 const tapPlays = () => prefs.singleClick || ios;
 /** iOS doesn't let pages change the volume, so there's nothing to fade. */
