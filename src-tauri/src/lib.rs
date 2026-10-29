@@ -91,12 +91,27 @@ fn get_library(state: State<AppState>) -> Snapshot {
     }
 }
 
+/// Ask for a folder. Phones have no folder picker: their music lives in the app's own folder.
+fn pick_folder(app: &AppHandle, title: &str) -> Result<Option<PathBuf>, String> {
+    #[cfg(desktop)]
+    {
+        let Some(picked) = app.dialog().file().set_title(title).blocking_pick_folder() else {
+            return Ok(None);
+        };
+        picked.into_path().map(Some).map_err(|e| e.to_string())
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, title);
+        Err("Folders can't be picked on a phone".into())
+    }
+}
+
 #[tauri::command]
 async fn add_folder(app: AppHandle, state: State<'_, AppState>) -> Result<Option<Settings>, String> {
-    let Some(picked) = app.dialog().file().set_title("Choose a music folder").blocking_pick_folder() else {
+    let Some(path) = pick_folder(&app, "Choose a music folder")? else {
         return Ok(None);
     };
-    let path = picked.into_path().map_err(|e| e.to_string())?;
     allow_dir(&app, &path);
     let folder = path.to_string_lossy().into_owned();
     let mut settings = state.settings.lock().unwrap();
@@ -346,7 +361,13 @@ fn set_app_icon(app: AppHandle, name: String) -> Result<(), String> {
     let bytes = APP_ICONS.iter().find(|(n, _)| *n == name).ok_or("Unknown icon")?.1;
     let icon = tauri::image::Image::from_bytes(bytes).map_err(|e| e.to_string())?;
     let window = app.get_webview_window("main").ok_or("No main window")?;
-    window.set_icon(icon).map_err(|e| e.to_string())
+    #[cfg(desktop)]
+    return window.set_icon(icon).map_err(|e| e.to_string());
+    #[cfg(mobile)]
+    {
+        let _ = (window, icon);
+        Err("The home screen icon can't change".into())
+    }
 }
 
 // ------------------------------------------------------------- SoundCloud
@@ -608,10 +629,9 @@ fn dl_folder(app: AppHandle, state: State<AppState>) -> String {
 
 #[tauri::command]
 async fn dl_pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<Option<Settings>, String> {
-    let Some(picked) = app.dialog().file().set_title("Choose where to save SoundCloud songs").blocking_pick_folder() else {
+    let Some(path) = pick_folder(&app, "Choose where to save SoundCloud songs")? else {
         return Ok(None);
     };
-    let path = picked.into_path().map_err(|e| e.to_string())?;
     let mut s = state.settings.lock().unwrap();
     s.downloads.folder = path.to_string_lossy().into_owned();
     state.save_settings(&s);
@@ -885,10 +905,9 @@ fn slsk_folder(app: AppHandle, state: State<AppState>) -> String {
 
 #[tauri::command]
 async fn slsk_pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<Option<Settings>, String> {
-    let Some(picked) = app.dialog().file().set_title("Choose where to save Soulseek downloads").blocking_pick_folder() else {
+    let Some(path) = pick_folder(&app, "Choose where to save Soulseek downloads")? else {
         return Ok(None);
     };
-    let path = picked.into_path().map_err(|e| e.to_string())?;
     let mut s = state.settings.lock().unwrap();
     s.soulseek.folder = path.to_string_lossy().into_owned();
     state.save_settings(&s);
