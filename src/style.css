@@ -668,3 +668,23 @@ tr.slsk-group.closed .caret { transform: rotate(-90deg); }
 .update-pill .btn.accent { padding: 6px 12px; font-size: 12.5px; animation: pop-in var(--t-slow) var(--ease); }
 .update-pill .icon-btn { width: 24px; height: 24px; }
 .update-pill svg.x { width: 9px; height: 9px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+
+/* Song editor */
+.settings.editor { width: min(620px, calc(100vw - 48px)); height: auto; max-height: min(640px, calc(100vh - 48px)); }
+.editor-body { display: grid; grid-template-columns: 170px 1fr; gap: 22px; padding: 6px 22px 10px; overflow-y: auto; }
+.editor-cover { display: flex; flex-direction: column; gap: 10px; }
+.editor-cover .cover { width: 170px; }
+.editor-cover .actions { justify-content: center; }
+.editor-check { display: flex; gap: 7px; align-items: flex-start; font-size: 12px; color: var(--muted); cursor: pointer; line-height: 1.35; }
+.editor-check input { margin: 1px 0 0; accent-color: var(--accent-strong); }
+.editor-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 10px; align-content: start; margin: 0; }
+.editor-fields label { flex: none; }
+.editor-fields .wide { grid-column: 1 / -1; }
+.editor-fields input { width: 100%; box-sizing: border-box; }
+.editor-fields .suggest { font-size: 12px; color: var(--muted); }
+.editor-fields .suggest .link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+.editor-fields .suggest .link:hover { text-decoration: underline; }
+.editor-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }
+.editor-foot .spacer { flex: 1; }
+.editor-foot .err { max-width: 60%; }
+@media (max-width: 620px) { .editor-body { grid-template-columns: 1fr; } .editor-cover { align-items: center; } }

@@ -362,19 +362,20 @@ fn assign_covers(tracks: &mut [Track], cover_dir: &Path) {
             }
         }
 
-        let mut cover = dirs.iter().filter(|d| one_album(d)).find_map(|d| folder_cover(d, &mut dir_cache));
+        // Art embedded in the songs comes first (it's what the song editor sets), then a picture in
+        // the album's folder. Embedded art is cached per source file (and its mtime), not per
+        // album: albums get regrouped when tags change, and a stale entry would show another song's art.
+        let mut cover = idx.iter().take(3).find_map(|&i| {
+            let t = &tracks[i];
+            let cached = cover_dir.join(format!("{}.img", hash_hex(&format!("{}|{}", t.path, t.mtime))));
+            if cached.exists() {
+                return Some(cached);
+            }
+            let data = embedded_cover(Path::new(&t.path))?;
+            fs::write(&cached, data).ok().map(|_| cached)
+        });
         if cover.is_none() {
-            // Cache embedded art per source file (and its mtime), not per album: albums get
-            // regrouped when tags change, and a stale album entry would show another song's art.
-            cover = idx.iter().take(3).find_map(|&i| {
-                let t = &tracks[i];
-                let cached = cover_dir.join(format!("{}.img", hash_hex(&format!("{}|{}", t.path, t.mtime))));
-                if cached.exists() {
-                    return Some(cached);
-                }
-                let data = embedded_cover(Path::new(&t.path))?;
-                fs::write(&cached, data).ok().map(|_| cached)
-            });
+            cover = dirs.iter().filter(|d| one_album(d)).find_map(|d| folder_cover(d, &mut dir_cache));
         }
         let cover = cover.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
         for &i in &idx {

@@ -3,6 +3,7 @@
 
 mod cover_color;
 mod downloads;
+mod editor;
 mod integrations;
 mod library;
 mod slsk;
@@ -917,6 +918,73 @@ mod update_tests {
     }
 }
 
+// ------------------------------------------------------------ song editor
+
+/// The editor only touches songs that are in the library.
+fn library_song(state: &AppState, path: &str) -> Result<PathBuf, String> {
+    if state.tracks.lock().unwrap().iter().any(|t| t.path == path) {
+        Ok(PathBuf::from(path))
+    } else {
+        Err("That song isn't in your library".into())
+    }
+}
+
+#[tauri::command]
+async fn song_tags(app: AppHandle, path: String) -> Result<editor::SongTags, String> {
+    blocking(move || editor::read(&library_song(&app.state::<AppState>(), &path)?)).await
+}
+
+#[derive(Serialize)]
+struct PickedImage {
+    path: String,
+    preview: String,
+}
+
+#[tauri::command]
+async fn pick_cover_image(app: AppHandle) -> Result<Option<PickedImage>, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Choose a cover picture")
+        .add_filter("Pictures", &["jpg", "jpeg", "png", "webp", "gif", "bmp"])
+        .blocking_pick_file();
+    let Some(picked) = picked else { return Ok(None) };
+    let path = picked.into_path().map_err(|e| e.to_string())?;
+    blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        Ok(Some(PickedImage { preview: editor::preview(&bytes)?, path: path.to_string_lossy().into_owned() }))
+    })
+    .await
+}
+
+/// Save the editor's changes into the song, and the cover into `cover_also` too (the rest of its album).
+#[tauri::command]
+async fn save_song_tags(
+    app: AppHandle,
+    path: String,
+    edit: editor::TagEdit,
+    cover: editor::CoverEdit,
+    cover_also: Vec<String>,
+) -> Result<(), String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let main = library_song(&state, &path)?;
+        let others = cover_also.iter().filter(|p| **p != path).map(|p| library_song(&state, p)).collect::<Result<Vec<_>, _>>()?;
+        editor::write(&main, &edit, &cover)?;
+        let mut failed = 0;
+        for p in &others {
+            if editor::write_cover(p, &cover).is_err() {
+                failed += 1;
+            }
+        }
+        if failed > 0 {
+            return Err(format!("Saved, but the cover couldn't be written to {failed} other song{} of the album", if failed == 1 { "" } else { "s" }));
+        }
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn sc_waveform(url: String, bins: usize) -> Result<Vec<f32>, String> {
     blocking(move || soundcloud::waveform(&url, bins)).await
@@ -1040,6 +1108,9 @@ fn main() {
             sc_prepare,
             sc_waveform,
             library_auto_folders,
+            song_tags,
+            pick_cover_image,
+            save_song_tags,
             check_update,
             tool_install,
             tool_cancel,

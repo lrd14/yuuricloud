@@ -96,8 +96,8 @@ function fmtTime(sec) {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
 }
 
-/** Something the webview can load: web URLs as they are, local files through the asset protocol. */
-const mediaSrc = (p) => (/^https?:\/\//.test(p) ? p : convertFileSrc(p));
+/** Something the webview can load: web and data: URLs as they are, local files through the asset protocol. */
+const mediaSrc = (p) => (/^(https?:\/\/|data:)/.test(p) ? p : convertFileSrc(p));
 
 /**
  * A small version of a song's cover for grids and lists: the library's cached thumbnail, or a
@@ -1004,9 +1004,10 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     jumpToCurrent();
   } else if (e.key === "Escape") {
+    if (!$("editor").hidden) return closeEditor();
     closeSettings();
     if (typing) el.search.blur();
-  } else if (typing || !el.settings.hidden) {
+  } else if (typing || !el.settings.hidden || !$("editor").hidden) {
     return;
   } else if (e.key === " ") {
     e.preventDefault();
@@ -1792,6 +1793,8 @@ function songMenu(t, i) {
     items.push(
       { label: fav ? "Remove from favourites" : "Add to favourites", icon: fav ? "i-heart" : "i-heart-outline", on: fav, action: () => toggleFavorite(t) },
       { label: "Open file location", icon: "i-folder", action: () => invoke("reveal_file", { path: t.path }).catch((e) => setStatus(String(e), 5000)) },
+      "-",
+      { label: "Edit song info…", icon: "i-edit", action: () => openEditor(t) },
     );
   }
   return items;
@@ -3016,3 +3019,173 @@ $("update-skip").addEventListener("click", () => {
 $("update-check").addEventListener("click", () => checkForUpdate(true));
 setInterval(() => prefs.checkUpdates && checkForUpdate(), 12 * 60 * 60 * 1000);
 renderUpdate();
+
+// ---------------------------------------------------------------- song editor
+// Change a song's title, artists, album, numbers, year and cover; written into the file itself.
+// Artist and album fields suggest names already in the library, and point out near-misses
+// ("lil darkie" → "Lil Darkie") so a typo doesn't split an artist in two.
+
+const editor = { track: null, cover: { kind: "keep" }, albumSongs: [], saving: false };
+
+/** Lower case, letters and digits only: "Lil-Darkie " and "lil darkie" compare equal. */
+const nameKey = (s) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, "");
+
+function editDistance(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+/** The library name `value` was probably meant to be, if it isn't exactly one already. */
+function closestName(value, names) {
+  const v = value.trim();
+  if (!v || names.includes(v)) return null;
+  const k = nameKey(v);
+  if (!k) return null;
+  const same = names.find((n) => nameKey(n) === k);
+  if (same) return same; // differs only in capitals, spaces or punctuation
+  if (k.length < 5) return null;
+  let best = null, bestD = k.length >= 7 ? 2 : 1;
+  for (const n of names) {
+    const d = editDistance(k, nameKey(n));
+    if (d <= bestD) [best, bestD] = [n, d - 0.5];
+  }
+  return best;
+}
+
+function libraryNames() {
+  const artists = new Set(), albums = new Set();
+  for (const t of state.tracks) {
+    for (const a of [t.artist, t.albumArtist]) if (a && a !== "Unknown Artist") artists.add(a);
+    if (t.album && t.album !== "Unknown Album") albums.add(t.album);
+  }
+  return { artists: [...artists].sort(collator.compare), albums: [...albums].sort(collator.compare) };
+}
+
+function editorSuggest(inputId, hintId, names) {
+  const input = $(inputId), hint = $(hintId);
+  const match = closestName(input.value, names);
+  hint.hidden = !match;
+  if (match) {
+    hint.innerHTML = `Did you mean <button type="button" class="link">${esc(match)}</button>?`;
+    hint.querySelector("button").onclick = () => {
+      input.value = match;
+      hint.hidden = true;
+    };
+  }
+}
+
+async function openEditor(t) {
+  closeMenu();
+  let tags;
+  try {
+    tags = await invoke("song_tags", { path: t.path });
+  } catch (e) {
+    return setStatus(String(e), 6000);
+  }
+  editor.track = t;
+  editor.cover = { kind: "keep" };
+  editor.albumSongs = state.tracks.filter((x) => albumKey(x) === albumKey(t));
+  const names = libraryNames();
+  editor.names = names;
+  $("ed-artists").innerHTML = names.artists.map((n) => `<option value="${esc(n)}"></option>`).join("");
+  $("ed-albums").innerHTML = names.albums.map((n) => `<option value="${esc(n)}"></option>`).join("");
+  // empty tags fall back to what the library shows (it may come from the folder names)
+  $("ed-title").value = tags.title || t.title;
+  $("ed-artist").value = tags.artist || t.artist;
+  $("ed-album-artist").value = tags.albumArtist || (tags.artist ? "" : t.albumArtist);
+  $("ed-album").value = tags.album || (t.album === "Unknown Album" ? "" : t.album);
+  $("ed-track").value = tags.trackNo ?? (t.trackNo || "");
+  $("ed-disc").value = tags.discNo ?? "";
+  $("ed-year").value = tags.year || t.year || "";
+  $("ed-path").textContent = t.path;
+  $("ed-path").title = t.path;
+  for (const id of ["ed-artist-hint", "ed-album-artist-hint", "ed-album-hint"]) $(id).hidden = true;
+  setEditorCover(tags.cover, t);
+  $("editor-album-count").textContent = editor.albumSongs.length;
+  $("editor-cover-all-row").hidden = editor.albumSongs.length < 2;
+  $("editor-cover-all").checked = true;
+  $("editor-error").textContent = "";
+  $("editor-save").disabled = false;
+  $("editor").hidden = false;
+  $("ed-title").focus();
+  $("ed-title").select();
+}
+
+function setEditorCover(src, t = editor.track) {
+  $("editor-cover-img").outerHTML = coverHtml(src || "", t.album || t.title).replace('class="cover"', 'id="editor-cover-img" class="cover"');
+  $("editor-cover-remove").disabled = !src;
+}
+
+function closeEditor() {
+  $("editor").hidden = true;
+  editor.track = null;
+}
+
+async function saveEditor() {
+  const t = editor.track;
+  if (!t || editor.saving) return;
+  const num = (id) => (Number($(id).value) > 0 ? Math.floor(Number($(id).value)) : null);
+  const edit = {
+    title: $("ed-title").value, artist: $("ed-artist").value, albumArtist: $("ed-album-artist").value, album: $("ed-album").value,
+    trackNo: num("ed-track"), discNo: num("ed-disc"), year: $("ed-year").value,
+  };
+  if (!edit.title.trim()) {
+    $("editor-error").textContent = "A song needs a title.";
+    return $("ed-title").focus();
+  }
+  const others = editor.cover.kind !== "keep" && $("editor-cover-all").checked ? editor.albumSongs.map((x) => x.path) : [];
+  // the file can't be rewritten while it's playing from it
+  const wasPlaying = current()?.path === t.path, at = audio.currentTime, playing = !audio.paused;
+  if (wasPlaying) {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+  }
+  editor.saving = true;
+  $("editor-save").disabled = true;
+  $("editor-error").textContent = "";
+  try {
+    await invoke("save_song_tags", { path: t.path, edit, cover: editor.cover, coverAlso: others });
+    closeEditor();
+    setStatus(`Saved “${edit.title.trim()}”`, 3000);
+    await rescan(false);
+  } catch (e) {
+    $("editor-error").textContent = String(e);
+    $("editor-save").disabled = false;
+  }
+  editor.saving = false;
+  if (wasPlaying) {
+    audio.src = mediaSrc(t.path);
+    audio.addEventListener("loadedmetadata", () => (audio.currentTime = at), { once: true });
+    if (playing) audio.play().catch(() => {});
+  }
+}
+
+$("editor-close").addEventListener("click", closeEditor);
+$("editor-cancel").addEventListener("click", closeEditor);
+$("editor-save").addEventListener("click", saveEditor);
+$("editor").addEventListener("mousedown", (e) => e.target === $("editor") && closeEditor());
+$("editor").addEventListener("keydown", (e) => e.key === "Enter" && e.target.tagName === "INPUT" && saveEditor());
+$("editor-cover-change").addEventListener("click", async () => {
+  try {
+    const picked = await invoke("pick_cover_image");
+    if (!picked) return;
+    editor.cover = { kind: "file", path: picked.path };
+    setEditorCover(picked.preview);
+  } catch (e) {
+    $("editor-error").textContent = String(e);
+  }
+});
+$("editor-cover-remove").addEventListener("click", () => {
+  editor.cover = { kind: "remove" };
+  setEditorCover("");
+});
+$("ed-artist").addEventListener("input", () => editorSuggest("ed-artist", "ed-artist-hint", editor.names.artists));
+$("ed-album-artist").addEventListener("input", () => editorSuggest("ed-album-artist", "ed-album-artist-hint", editor.names.artists));
+$("ed-album").addEventListener("input", () => editorSuggest("ed-album", "ed-album-hint", editor.names.albums));
