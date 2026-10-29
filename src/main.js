@@ -76,6 +76,19 @@ document.documentElement.classList.add(platform);
 // The iPhone Duo's screens are nearly square, both folded and open; other iPhones are about 2:1
 const duo = /iPhone/.test(navigator.userAgent) && Math.max(screen.width, screen.height) / Math.min(screen.width, screen.height) < 1.7;
 document.body.classList.toggle("duo", duo);
+
+/**
+ * Keep the app to the width of the screen that's showing. Open and held upright, the iPhone Duo
+ * can lay the page out wider than the screen, which ran the app off the right edge.
+ */
+function fitToScreen() {
+  if (visualViewport.scale !== 1) return; // zoomed in: the visible part isn't the screen
+  document.documentElement.style.setProperty("--app-w", Math.round(visualViewport.width) + "px");
+}
+if (ios && window.visualViewport) {
+  visualViewport.addEventListener("resize", fitToScreen);
+  fitToScreen();
+}
 /** Touch screens play a song on the first tap; there's no double-click there. */
 const tapPlays = () => prefs.singleClick || ios;
 /** iOS doesn't let pages change the volume, so there's nothing to fade. */

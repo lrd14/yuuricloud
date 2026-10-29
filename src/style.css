@@ -701,7 +701,9 @@ body:not(.ios) .ios-only { display: none !important; }
 body.ios .desktop-only, body.ios .win-controls, body.ios #downloads-btn, body.ios .search kbd, body.ios #add-folder,
 body.ios #source [data-source="slsk"], body.ios .volume, body.ios .local-hint { display: none !important; }
 /* no see-through window here: a solid background, edge to edge, clear of the notch and home bar */
-html.ios, html.ios body { background: #101218; }
+html.ios, html.ios body { background: #101218; overflow: hidden; }
+/* --app-w is the width of the screen that's showing (main.js); see fitToScreen there */
+body.ios #app { width: var(--app-w, auto); }
 body.ios {
   --tint: rgb(16, 18, 24);
   -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
@@ -752,7 +754,7 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
   body.ios .panel-head .back + h2 { padding-left: 2px; }
   body.ios .panel-head .phone-only { margin-top: 6px; }
   body.ios { --cover-min: 132px; }
-  body.ios .list li { padding: 11px 12px; font-size: 15px; }
+  body.ios .list li:not(.group) { padding: 11px 12px; font-size: 15px; }
   body.ios td { padding-top: 10px; padding-bottom: 10px; font-size: 14.5px; }
   body.ios th.num, body.ios td.num { width: 34px; }
   body.ios th.time, body.ios td.time { width: 54px; padding-right: 10px; }
@@ -818,8 +820,17 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
    that corner as a gap across the whole top of the screen. The title bar moves up into the gap
    and stops short of the corner, instead of leaving an empty band above it and still running
    under the corner's lower end, where the settings button couldn't be tapped. */
+body.ios.duo {
+  /* Room for the time and battery in the open screen's top corner. Folded, they stand in their
+     own strip down the side, which iOS keeps clear already, so the room shrinks away to nothing. */
+  --corner: max(0px, 140px - 2 * env(safe-area-inset-right));
+}
 body.ios.duo #app { padding-top: 0; }
 body.ios.duo .titlebar {
   height: auto; min-height: max(52px, env(safe-area-inset-top));
-  padding-right: calc(env(safe-area-inset-top) + 8px);
+  padding-right: max(env(safe-area-inset-top) + 8px, var(--corner));
+}
+/* Open on its side, the time and battery stand in a column that reaches below the title bar */
+@media (orientation: landscape) {
+  body.ios.duo .right .panel-head { padding-right: var(--corner); }
 }
