@@ -437,14 +437,23 @@ impl Conn {
 
     /// Every download slskd knows about, newest first.
     pub fn transfers(&self) -> Result<Vec<TransferInfo>, String> {
-        let users = self.get("/api/v0/transfers/downloads")?;
+        self.transfer_list("downloads", true)
+    }
+
+    /// Every file other users are downloading (or have downloaded) from our shares, newest first.
+    pub fn uploads(&self) -> Result<Vec<TransferInfo>, String> {
+        self.transfer_list("uploads", false)
+    }
+
+    fn transfer_list(&self, direction: &str, local_paths: bool) -> Result<Vec<TransferInfo>, String> {
+        let users = self.get(&format!("/api/v0/transfers/{direction}"))?;
         let mut out = Vec::new();
         for u in users.as_array().into_iter().flatten() {
             for d in u["directories"].as_array().into_iter().flatten() {
                 for f in d["files"].as_array().into_iter().flatten() {
                     let filename = f["filename"].as_str().unwrap_or("").to_string();
                     let state = f["state"].as_str().unwrap_or("").to_string();
-                    let path = if state.contains("Succeeded") { self.local_path(&filename) } else { None };
+                    let path = if local_paths && state.contains("Succeeded") { self.local_path(&filename) } else { None };
                     out.push(TransferInfo {
                         id: f["id"].as_str().unwrap_or("").to_string(),
                         username: f["username"].as_str().unwrap_or("").to_string(),
@@ -491,6 +500,16 @@ impl Conn {
 
     pub fn clear_finished(&self) -> Result<(), String> {
         self.request("DELETE", "/api/v0/transfers/downloads/all/completed", None).map(|_| ())
+    }
+
+    /// Stop sending a file to another user; `remove` also takes it off the list.
+    pub fn cancel_upload(&self, username: &str, id: &str, remove: bool) -> Result<(), String> {
+        self.request("DELETE", &format!("/api/v0/transfers/uploads/{}/{}?remove={remove}", url_part(username), url_part(id)), None)
+            .map(|_| ())
+    }
+
+    pub fn clear_finished_uploads(&self) -> Result<(), String> {
+        self.request("DELETE", "/api/v0/transfers/uploads/all/completed", None).map(|_| ())
     }
 }
 

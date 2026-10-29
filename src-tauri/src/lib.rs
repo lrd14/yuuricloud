@@ -883,6 +883,16 @@ async fn slsk_transfers(app: AppHandle) -> Result<Vec<slsk::TransferInfo>, Strin
 }
 
 #[tauri::command]
+async fn slsk_uploads(app: AppHandle) -> Result<Vec<slsk::TransferInfo>, String> {
+    with_slsk(app, |c| c.uploads()).await
+}
+
+#[tauri::command]
+async fn slsk_cancel_upload(app: AppHandle, username: String, id: String, remove: bool) -> Result<(), String> {
+    with_slsk(app, move |c| c.cancel_upload(&username, &id, remove)).await
+}
+
+#[tauri::command]
 async fn slsk_queue_position(app: AppHandle, username: String, id: String) -> Result<Option<u64>, String> {
     with_slsk(app, move |c| c.queue_position(&username, &id)).await
 }
@@ -894,7 +904,7 @@ async fn slsk_cancel(app: AppHandle, username: String, id: String, remove: bool)
 
 #[tauri::command]
 async fn slsk_clear_finished(app: AppHandle) -> Result<(), String> {
-    with_slsk(app, |c| c.clear_finished()).await
+    with_slsk(app, |c| c.clear_finished().and(c.clear_finished_uploads())).await
 }
 
 #[tauri::command]
@@ -1220,6 +1230,8 @@ pub fn run() {
             slsk_search_stop,
             slsk_download,
             slsk_transfers,
+            slsk_uploads,
+            slsk_cancel_upload,
             slsk_cancel,
             slsk_queue_position,
             slsk_clear_finished,

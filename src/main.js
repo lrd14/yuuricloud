@@ -36,7 +36,7 @@ const state = {
   scanning: false, rescanQueued: false,
   source: "local", // "local" library or "sc" (SoundCloud)
   // Soulseek through slskd: connection status, recent searches and slskd's download list
-  slsk: { status: null, searches: [], current: null, filter: "", transfers: [], connecting: false, error: "", collapsed: new Set(), extraFiles: [] },
+  slsk: { status: null, searches: [], current: null, filter: "", transfers: [], uploads: [], connecting: false, error: "", collapsed: new Set(), extraFiles: [] },
   sc: {
     playlists: [],
     liked: new Set(),  // urns of liked tracks, known once Likes has loaded
@@ -2259,13 +2259,16 @@ function renderDownloads() {
 
   const slskFinished = state.slsk.transfers.filter(slskDone);
   const failed = dl.finished.filter((it) => it.status === "failed").length + slskFinished.filter((x) => !slskOk(x)).length;
-  $("dl-summary").textContent = !active && !dl.finished.length && !slskFinished.length
+  const sending = slskSending();
+  $("dl-summary").textContent = !active && !dl.finished.length && !slskFinished.length && !sending
     ? "Nothing downloading. Right-click a SoundCloud song or list, or a Soulseek result, to download it."
-    : [active && `${active} to go`, dl.paused && "paused", failed && `${failed} failed`].filter(Boolean).join(" · ") || "All done";
+    : [active && `${active} to go`, dl.paused && "paused", failed && `${failed} failed`,
+      sending && `${sending} being downloaded from your library`].filter(Boolean).join(" · ") || "All done";
   $("dl-pause").textContent = dl.paused ? "Resume" : "Pause";
   $("dl-pause").hidden = !scActive;
-  $("dl-clear").hidden = !dl.finished.length && !slskFinished.length;
+  $("dl-clear").hidden = !dl.finished.length && !slskFinished.length && !state.slsk.uploads.some(slskDone);
   renderSlskTransfers();
+  renderSlskUploads();
 
   const it = dl.current;
   $("dl-current").innerHTML = it
@@ -2382,7 +2385,8 @@ async function slskConnect() {
 
 async function slskDisconnect() {
   await invoke("slsk_disconnect").catch(() => {});
-  Object.assign(state.slsk, { status: null, transfers: [] });
+  Object.assign(state.slsk, { status: null, transfers: [], uploads: [] });
+  slskSeenUploads = slskSeenFinished = null;
   renderSlskSettings();
   renderDownloads();
   if (state.source === "slsk") renderSlsk();
@@ -2411,7 +2415,9 @@ function slskStatusText() {
   if (!st) return s.error || "Not connected";
   if (st.loggedIn) {
     const port = st.listenPort ? ` · listening on port ${st.listenPort}` : "";
-    return `Connected as ${st.username || state.settings.soulseek?.username}${port}`;
+    const sending = slskSending();
+    const up = sending ? ` · ${sending} ${sending === 1 ? "song" : "songs"} being downloaded from your library` : "";
+    return `Connected as ${st.username || state.settings.soulseek?.username}${port}${up}`;
   }
   if (st.busy) return "Logging in to Soulseek…";
   return `slskd is running but not logged in (${st.state || "disconnected"}). Check the username and password.`;
@@ -2767,7 +2773,14 @@ function slskOk(x) {
 function slskActive() {
   return state.slsk.transfers.filter((x) => !slskDone(x)).length;
 }
+/** Files other users are downloading from our library right now, or waiting for in our queue. */
+function slskSending() {
+  return state.slsk.uploads.filter((x) => !slskDone(x)).length;
+}
 let slskTransferTimer, slskSeenDone = null, slskRescanTimer;
+// What the last poll saw, to tell what's new. null until the first poll after connecting, so
+// what was already there doesn't all announce itself at once.
+let slskSeenUploads = null, slskSeenFinished = null;
 
 async function pollSlskTransfers() {
   clearTimeout(slskTransferTimer);
@@ -2778,6 +2791,8 @@ async function pollSlskTransfers() {
   } catch {
     return;
   }
+  s.uploads = await invoke("slsk_uploads").catch(() => s.uploads);
+  slskAnnounce();
   // new files finished: pick them up if the download folder is in the library
   const done = new Set(s.transfers.filter(slskOk).map((x) => x.id));
   if (slskSeenDone && [...done].some((id) => !slskSeenDone.has(id))) {
@@ -2787,7 +2802,7 @@ async function pollSlskTransfers() {
   slskSeenDone = done;
   renderDownloads();
   slskSwitchStuck();
-  const busy = slskActive() > 0 || !$("downloads").hidden;
+  const busy = slskActive() > 0 || slskSending() > 0 || !$("downloads").hidden;
   slskTransferTimer = setTimeout(pollSlskTransfers, busy ? 1500 : 15000);
 }
 
@@ -2832,6 +2847,72 @@ async function askSlskPlaces() {
   slskAsking = false;
 }
 
+/** Say in the status line when someone starts downloading from the library, and when our own
+ *  Soulseek downloads finish or fail. */
+function slskAnnounce() {
+  const s = state.slsk, notes = [];
+  if (slskSeenUploads) {
+    const fresh = s.uploads.filter((x) => !slskSeenUploads.has(x.id) && !slskDone(x));
+    const byUser = new Map();
+    for (const x of fresh) byUser.set(x.username, [...(byUser.get(x.username) || []), x]);
+    for (const [user, files] of byUser) {
+      notes.push(files.length === 1
+        ? `${user} is downloading "${baseName(files[0].filename)}" from your library`
+        : `${user} is downloading ${files.length} songs from your library`);
+    }
+  }
+  slskSeenUploads = new Set(s.uploads.map((x) => x.id));
+
+  if (slskSeenFinished) {
+    const fresh = s.transfers.filter((x) => slskDone(x) && !slskSeenFinished.has(x.id) && !x.state.includes("Cancelled"));
+    const ok = fresh.filter(slskOk), bad = fresh.filter((x) => !slskOk(x));
+    if (ok.length) notes.push(ok.length === 1 ? `Downloaded "${baseName(ok[0].filename)}" from Soulseek` : `Downloaded ${ok.length} songs from Soulseek`);
+    if (bad.length) notes.push(bad.length === 1 ? `Couldn't download "${baseName(bad[0].filename)}" (see Downloads)` : `${bad.length} Soulseek downloads failed (see Downloads)`);
+  }
+  slskSeenFinished = new Set(s.transfers.filter(slskDone).map((x) => x.id));
+  if (notes.length) setStatus(notes.join(" · "), 8000);
+}
+
+function slskUploadText(x) {
+  const st = x.state;
+  if (st.includes("Succeeded")) return `Sent · ${fmtBytes(x.size)}`;
+  if (st.includes("Cancelled")) return "Cancelled";
+  if (st.includes("Completed")) return `Stopped${x.error ? `: ${x.error}` : ` (${st.replace("Completed, ", "")})`}`;
+  if (st.includes("InProgress")) {
+    const pct = x.size ? Math.floor((x.bytes / x.size) * 100) : 0;
+    return `Sending · ${pct}% · ${fmtBytes(x.bytes)} of ${fmtBytes(x.size)}${x.speed ? ` · ${fmtBytes(x.speed)}/s` : ""}`;
+  }
+  if (st.includes("Queued")) return x.placeInQueue ? `Waiting in your queue — ${ordinal(x.placeInQueue)} in line` : "Waiting in your queue";
+  return "Starting…";
+}
+
+function renderSlskUploads() {
+  const list = state.slsk.uploads;
+  $("dl-up-title").hidden = $("dl-up-note").hidden = !list.length;
+  $("dl-up-title").textContent = `Shared from your library · ${list.length}`;
+  $("dl-up").innerHTML = list.slice(0, 300).map((x) => {
+    const cls = slskOk(x) ? "saved" : slskDone(x) && !x.state.includes("Cancelled") ? "failed" : "";
+    const bar = x.state.includes("InProgress") && x.size ? `<div class="dl-bar small"><i style="width:${(x.bytes / x.size) * 100}%"></i></div>` : "";
+    const actions = !slskDone(x)
+      ? `<button class="icon-btn" data-act="slsk-up-cancel" title="Stop sending this"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`
+      : `<button class="icon-btn" data-act="slsk-up-remove" title="Remove from list"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`;
+    const name = baseName(x.filename);
+    return `<div class="dl-row ${cls}" data-slsk-up="${esc(x.id)}">${coverHtml("", parentName(x.filename) || name)}<div class="dl-row-text">` +
+      `<div class="name" title="${esc(x.filename)}">${esc(name)}</div><div class="sub" title="${esc(slskUploadText(x))}">${esc(x.username)} · ${esc(slskUploadText(x))}</div>${bar}</div>` +
+      `<div class="dl-row-actions">${actions}</div></div>`;
+  }).join("");
+}
+
+$("downloads").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-act^='slsk-up-']");
+  if (!b) return;
+  const x = state.slsk.uploads.find((t) => t.id === b.closest(".dl-row").dataset.slskUp);
+  if (!x) return;
+  await invoke("slsk_cancel_upload", { username: x.username, id: x.id, remove: b.dataset.act === "slsk-up-remove" })
+    .catch((err) => setStatus(String(err), 5000));
+  pollSlskTransfers();
+});
+
 function renderSlskTransfers() {
   const list = state.slsk.transfers;
   $("dl-slsk-title").hidden = !list.length;
@@ -2855,7 +2936,7 @@ function renderSlskTransfers() {
 }
 
 $("downloads").addEventListener("click", async (e) => {
-  const b = e.target.closest("button[data-act^='slsk-']");
+  const b = e.target.closest("button[data-act^='slsk-']:not([data-act^='slsk-up-'])");
   if (!b) return;
   const x = state.slsk.transfers.find((t) => t.id === b.closest(".dl-row").dataset.slsk);
   if (!x) return;
