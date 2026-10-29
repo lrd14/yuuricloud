@@ -11,8 +11,6 @@ on:
         description: Attach the .ipa to the release of this version
         type: boolean
         default: false
-  push:
-    branches: [claude/code-scan-review-commits-5y4qsr]
 
 permissions:
   contents: write

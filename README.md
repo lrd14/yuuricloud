@@ -3,10 +3,10 @@
 [![build](https://img.shields.io/github/actions/workflow/status/lrd14/yuuricloud/release.yml?label=build)](https://github.com/lrd14/yuuricloud/actions/workflows/release.yml)
 [![release](https://img.shields.io/github/v/release/lrd14/yuuricloud?label=release&color=0a7bbb)](https://github.com/lrd14/yuuricloud/releases/latest)
 [![downloads](https://img.shields.io/github/downloads/lrd14/yuuricloud/total?label=downloads&color=44cc11)](https://github.com/lrd14/yuuricloud/releases)
-[![platforms](https://img.shields.io/badge/platforms-windows%20%7C%20macos%20%7C%20linux-9a9a9a)](https://github.com/lrd14/yuuricloud/releases/latest)
+[![platforms](https://img.shields.io/badge/platforms-windows%20%7C%20macos%20%7C%20linux%20%7C%20iOS-9a9a9a)](https://github.com/lrd14/yuuricloud/releases/latest)
 [![built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db?logo=tauri&logoColor=white)](https://tauri.app)
 
-A small, fast music player for your local library, your SoundCloud and Soulseek, on Windows, macOS and Linux.
+A small, fast music player for your local library, your SoundCloud and Soulseek, on Windows, macOS and Linux, plus a player for iPhone and iPad.
 
 <p align="center"><img src="docs/preview.png" alt="yuuricloud showing a music library with album covers, and the Downloads page" width="900"></p>
 
@@ -147,6 +147,23 @@ If Last.fm keys are set, the status also shows the album cover from Last.fm (Dis
 Keys, the Last.fm session, the SoundCloud login and the Soulseek login are stored in `settings.json` in the app
 data folder.
 - OS media keys work where the webview supports the Media Session API
+
+## iPhone and iPad
+
+The iOS version plays your music and your SoundCloud. Soulseek, downloads and Discord stay on the computer.
+
+- **Install:** each release has a `yuuricloud_x.y.z_iOS-unsigned.ipa`. Install it with [AltStore](https://altstore.io) or
+  [SideStore](https://sidestore.io), which sign it with your Apple ID (with a free Apple ID, reinstall it every 7 days).
+- **Music:** copy songs into yuuricloud's folder: in the Files app it's **On My iPhone → yuuricloud**; from a computer,
+  drag them onto yuuricloud in the iPhone's Files tab in Finder (or the Apple Devices app on Windows). New songs show up
+  when you come back to the app.
+- **SoundCloud:** on the computer, open Settings → Integrations → SoundCloud and click **Link phone…**. After approving
+  in the browser, scan the QR code with the iPhone's camera, or copy the code and paste it on the phone. The phone gets a
+  login of its own; the computer stays signed in. Anyone with the code can use your account, so don't share it.
+- On a phone the library shows one panel at a time: tap to play, hold a song for its menu. An unfolded iPhone Duo and
+  iPads show all three panels.
+
+The `iOS` workflow builds the .ipa on GitHub's Macs (also runnable by hand from the Actions tab).
 
 ## Layout
 

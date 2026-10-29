@@ -77,9 +77,18 @@ jobs:
           cp src-tauri/target/release/yuuricloud.exe "yuuricloud_${version}_x64-portable.exe"
           gh release upload "v$version" "yuuricloud_${version}_x64-portable.exe" --clobber
 
-  # Publish the release only once every platform has uploaded its files.
-  publish:
+  # The iPhone and iPad .ipa, attached to the same release once the build jobs have made it.
+  ios:
     needs: build
+    uses: ./.github/workflows/ios.yml
+    with:
+      release: true
+
+  # Publish the release only once every platform has uploaded its files. A failed iOS build
+  # doesn't hold back the computer versions.
+  publish:
+    needs: [build, ios]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
