@@ -70,7 +70,7 @@ pub fn unix_now() -> i64 {
 const LASTFM_API: &str = "https://ws.audioscrobbler.com/2.0/";
 /// The shared Last.fm API account's key. Public: it is part of every sign-in link anyway. Empty
 /// turns the shared account off, so users need their own keys.
-pub const BUILTIN_LASTFM_KEY: &str = "";
+pub const BUILTIN_LASTFM_KEY: &str = "efeac10d988e63499c24372533fdba5c";
 
 pub fn lastfm_builtin_available() -> bool {
     !BUILTIN_LASTFM_KEY.is_empty() && !crate::soundcloud::BUILTIN_TOKEN_PROXY.is_empty()
