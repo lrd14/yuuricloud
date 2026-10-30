@@ -69,6 +69,8 @@ pub struct Conn {
     pub downloads_dir: Option<PathBuf>,
     /// The port other Soulseek users connect to (managed mode).
     listen_port: Option<u16>,
+    /// iOS: the Soulseek client built into the app, in place of slskd.
+    native: Option<crate::slsk_native::Native>,
 }
 
 impl Drop for Conn {
@@ -231,6 +233,7 @@ flags:
         pid_file: Some(pid_file),
         downloads_dir: Some(launch.downloads.to_path_buf()),
         listen_port: Some(listen),
+        native: None,
     };
     let started = Instant::now();
     loop {
@@ -313,7 +316,7 @@ pub fn connect_external(cfg: &SlskConfig) -> Result<Conn, String> {
     if !base.starts_with("http://") && !base.starts_with("https://") {
         return Err("The slskd address should start with http:// or https://".into());
     }
-    let mut conn = Conn { base, key: cfg.api_key.trim().to_string(), child: std::sync::Mutex::new(None), pid_file: None, downloads_dir: None, listen_port: None };
+    let mut conn = Conn { base, key: cfg.api_key.trim().to_string(), child: std::sync::Mutex::new(None), pid_file: None, downloads_dir: None, listen_port: None, native: None };
     conn.get("/api/v0/application")?;
     // ask slskd where it saves downloads, so finished files can be shown in their folder
     conn.downloads_dir = conn
@@ -321,6 +324,21 @@ pub fn connect_external(cfg: &SlskConfig) -> Result<Conn, String> {
         .ok()
         .and_then(|o| o["directories"]["downloads"].as_str().map(PathBuf::from));
     Ok(conn)
+}
+
+/// iOS: log in with the Soulseek client built into the app (see `slsk_native`).
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub fn connect_native(cfg: &SlskConfig, downloads: &Path, shares: &[String]) -> Result<Conn, String> {
+    let native = crate::slsk_native::connect(cfg, downloads, shares)?;
+    Ok(Conn {
+        base: String::new(),
+        key: String::new(),
+        child: std::sync::Mutex::new(None),
+        pid_file: None,
+        downloads_dir: Some(native.downloads_dir().to_path_buf()),
+        listen_port: None,
+        native: Some(native),
+    })
 }
 
 impl Conn {
@@ -359,8 +377,11 @@ impl Conn {
         self.child.lock().unwrap().is_some()
     }
 
-    /// Whether slskd is still running (managed mode).
+    /// Whether slskd is still running (managed mode), or the built-in client still logged in.
     pub fn alive(&self) -> bool {
+        if let Some(n) = &self.native {
+            return n.alive();
+        }
         match self.child.lock().unwrap().as_mut() {
             Some(c) => matches!(c.try_wait(), Ok(None)),
             None => true,
@@ -368,6 +389,9 @@ impl Conn {
     }
 
     pub fn status(&self) -> Result<Value, String> {
+        if let Some(n) = &self.native {
+            return Ok(n.status());
+        }
         let s = self.get("/api/v0/server")?;
         Ok(json!({
             "connected": s["isConnected"].as_bool().unwrap_or(false),
@@ -381,6 +405,9 @@ impl Conn {
 
     /// Start a search; returns its id.
     pub fn search(&self, text: &str) -> Result<String, String> {
+        if let Some(n) = &self.native {
+            return n.search(text);
+        }
         let id = uuid_v4();
         self.request(
             "POST",
@@ -392,6 +419,9 @@ impl Conn {
 
     /// The search's progress and the audio files found so far.
     pub fn search_results(&self, id: &str) -> Result<SearchResults, String> {
+        if let Some(n) = &self.native {
+            return n.search_results(id);
+        }
         let s = self.get(&format!("/api/v0/searches/{id}"))?;
         let responses = self.get(&format!("/api/v0/searches/{id}/responses"))?;
         let mut files = Vec::new();
@@ -427,21 +457,34 @@ impl Conn {
     }
 
     pub fn stop_search(&self, id: &str) -> Result<(), String> {
+        if let Some(n) = &self.native {
+            n.stop_search(id);
+            return Ok(());
+        }
         self.request("PUT", &format!("/api/v0/searches/{id}"), None).map(|_| ())
     }
 
     pub fn download(&self, username: &str, files: &[QueueFile]) -> Result<(), String> {
+        if let Some(n) = &self.native {
+            return n.download(username, files);
+        }
         let body = serde_json::to_value(files).map_err(|e| e.to_string())?;
         self.request("POST", &format!("/api/v0/transfers/downloads/{}", url_part(username)), Some(body)).map(|_| ())
     }
 
     /// Every download slskd knows about, newest first.
     pub fn transfers(&self) -> Result<Vec<TransferInfo>, String> {
+        if let Some(n) = &self.native {
+            return Ok(n.transfers());
+        }
         self.transfer_list("downloads", true)
     }
 
     /// Every file other users are downloading (or have downloaded) from our shares, newest first.
     pub fn uploads(&self) -> Result<Vec<TransferInfo>, String> {
+        if let Some(n) = &self.native {
+            return Ok(n.uploads());
+        }
         self.transfer_list("uploads", false)
     }
 
@@ -488,35 +531,59 @@ impl Conn {
 
     /// Ask the user we're downloading from where we are in their upload queue.
     pub fn queue_position(&self, username: &str, id: &str) -> Result<Option<u64>, String> {
+        if let Some(n) = &self.native {
+            return Ok(n.queue_position(username, id));
+        }
         let t = self.get(&format!("/api/v0/transfers/downloads/{}/{}/position", url_part(username), url_part(id)))?;
         Ok(t["placeInQueue"].as_u64().or_else(|| t.as_u64()))
     }
 
     /// Cancel a download; `remove` also takes it off the list.
     pub fn cancel(&self, username: &str, id: &str, remove: bool) -> Result<(), String> {
+        if let Some(n) = &self.native {
+            n.cancel(username, id, remove);
+            return Ok(());
+        }
         self.request("DELETE", &format!("/api/v0/transfers/downloads/{}/{}?remove={remove}", url_part(username), url_part(id)), None)
             .map(|_| ())
     }
 
     pub fn clear_finished(&self) -> Result<(), String> {
+        if let Some(n) = &self.native {
+            n.clear_finished();
+            return Ok(());
+        }
         self.request("DELETE", "/api/v0/transfers/downloads/all/completed", None).map(|_| ())
     }
 
     /// Stop sending a file to another user; `remove` also takes it off the list.
     pub fn cancel_upload(&self, username: &str, id: &str, remove: bool) -> Result<(), String> {
+        if let Some(n) = &self.native {
+            n.cancel_upload(username, id, remove);
+            return Ok(());
+        }
         self.request("DELETE", &format!("/api/v0/transfers/uploads/{}/{}?remove={remove}", url_part(username), url_part(id)), None)
             .map(|_| ())
     }
 
     pub fn clear_finished_uploads(&self) -> Result<(), String> {
+        if let Some(n) = &self.native {
+            n.clear_finished_uploads();
+            return Ok(());
+        }
         self.request("DELETE", "/api/v0/transfers/uploads/all/completed", None).map(|_| ())
     }
 }
 
-const AUDIO_EXTS: &[&str] = &["mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav", "aiff", "aif", "alac", "wma", "ape", "wv"];
+pub(crate) const AUDIO_EXTS: &[&str] = &["mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav", "aiff", "aif", "alac", "wma", "ape", "wv"];
 
-fn extension(filename: &str) -> String {
-    let name = filename.rsplit(['\\', '/']).next().unwrap_or(filename);
+/// The file name at the end of a Soulseek path (`…\Album\01 Song.flac`).
+pub(crate) fn base_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+pub(crate) fn extension(filename: &str) -> String {
+    let name = base_name(filename);
     name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default()
 }
 
@@ -623,7 +690,7 @@ mod tests {
         assert!(conn.transfers().unwrap().is_empty());
         assert!(conn.search("test").unwrap_err().contains("logged in"));
         // without the key, slskd turns requests away
-        let open = Conn { base: conn.base.clone(), key: "wrong".into(), child: std::sync::Mutex::new(None), pid_file: None, downloads_dir: None, listen_port: None };
+        let open = Conn { base: conn.base.clone(), key: "wrong".into(), child: std::sync::Mutex::new(None), pid_file: None, downloads_dir: None, listen_port: None, native: None };
         assert!(open.status().unwrap_err().contains("API key"));
         drop(open);
         drop(conn);

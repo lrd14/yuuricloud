@@ -2411,7 +2411,7 @@ async function pollSlskStatus() {
 
 function slskStatusText() {
   const s = state.slsk, st = s.status;
-  if (s.connecting) return "Starting slskd…";
+  if (s.connecting) return ios ? "Connecting to Soulseek…" : "Starting slskd…";
   if (!st) return s.error || "Not connected";
   if (st.loggedIn) {
     const port = st.listenPort ? ` · listening on port ${st.listenPort}` : "";
@@ -2420,7 +2420,7 @@ function slskStatusText() {
     return `Connected as ${st.username || state.settings.soulseek?.username}${port}${up}`;
   }
   if (st.busy) return "Logging in to Soulseek…";
-  return `slskd is running but not logged in (${st.state || "disconnected"}). Check the username and password.`;
+  return `${ios ? "Soulseek" : "slskd is running but"} not logged in (${st.state || "disconnected"}). Check the username and password.`;
 }
 
 // ------------------------------------------------------------ the view
@@ -2925,7 +2925,7 @@ function renderSlskTransfers() {
     const cls = slskOk(x) ? "saved" : failed ? "failed" : "";
     const bar = x.state.includes("InProgress") && x.size ? `<div class="dl-bar small"><i style="width:${(x.bytes / x.size) * 100}%"></i></div>` : "";
     const actions = !slskDone(x) ? `<button class="icon-btn" data-act="slsk-cancel" title="Cancel"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`
-      : (x.path ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
+      : (x.path && !ios ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
         (failed ? `<button class="btn small" data-act="slsk-retry">Retry</button>` : "") +
         `<button class="icon-btn" data-act="slsk-remove" title="Remove from list"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`;
     const name = baseName(x.filename);

@@ -150,7 +150,8 @@ data folder.
 
 ## iPhone and iPad
 
-The iOS version plays your music and your SoundCloud. Soulseek, downloads and Discord stay on the computer.
+The iOS version plays your music and your SoundCloud, and searches and downloads from Soulseek. SoundCloud
+downloads and Discord stay on the computer.
 
 - **Install:** each release has a `yuuricloud_x.y.z_iOS-unsigned.ipa`. Install it with [AltStore](https://altstore.io) or
   [SideStore](https://sidestore.io), which sign it with your Apple ID (with a free Apple ID, reinstall it every 7 days).
@@ -160,6 +161,10 @@ The iOS version plays your music and your SoundCloud. Soulseek, downloads and Di
 - **SoundCloud:** on the computer, open Settings → Integrations → SoundCloud and click **Link phone…**. After approving
   in the browser, scan the QR code with the iPhone's camera, or copy the code and paste it on the phone. The phone gets a
   login of its own; the computer stays signed in. Anyone with the code can use your account, so don't share it.
+- **Soulseek:** the app is its own Soulseek client on iOS, since iOS can't run slskd (it uses
+  [soulseek-rs](https://github.com/michel/soulseek-rs)). Enter your login under Settings → Integrations → Soulseek
+  and connect. Downloads go to a `Soulseek` folder inside yuuricloud's folder and show up in the library. iOS pauses
+  apps in the background, so downloads only keep going while yuuricloud is open or playing music.
 - On a phone the library shows one panel at a time: tap to play, hold a song for its menu. An unfolded iPhone Duo and
   iPads show all three panels.
 

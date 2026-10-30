@@ -3568,6 +3568,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "soulseek-rs-lib"
+version = "19.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe616956fd53a0e707357af3995902df20fda5af97ea7fba6aec0918a694120d"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "soup3"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5582,6 +5591,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "soulseek-rs-lib",
  "symphonia",
  "sysinfo",
  "tauri",
