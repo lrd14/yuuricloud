@@ -1,8 +1,12 @@
 // Checks the Worker's request handling with SoundCloud mocked out. Run: node soundcloud-proxy/test.mjs
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import worker from "./worker.js";
 
-const env = { SC_CLIENT_ID: "id123", SC_CLIENT_SECRET: "secret456", ALLOWED_REDIRECT: "http://127.0.0.1:8974/callback" };
+const env = {
+  SC_CLIENT_ID: "id123", SC_CLIENT_SECRET: "secret456", ALLOWED_REDIRECT: "http://127.0.0.1:8974/callback",
+  LASTFM_API_KEY: "lfmkey", LASTFM_SECRET: "lfmsecret",
+};
 let sent = null;
 globalThis.fetch = async (url, init) => {
   sent = { url, body: new URLSearchParams(init.body.toString()) };
@@ -50,5 +54,25 @@ assert.equal(r.status, 405);
 // the secret never appears in a reply
 r = await post({ grant_type: "client_credentials" });
 assert.ok(!(await r.text()).includes("secret456"));
+
+// Last.fm: key and signature added, as Last.fm documents (sorted name+value pairs, then the secret)
+sent = null;
+r = await post({ method: "track.scrobble", artist: "Björk", track: "Jóga", sk: "sess", timestamp: "123", api_key: "evil", api_sig: "evil", format: "xml" }, "/lastfm");
+assert.equal(r.status, 200);
+assert.equal(sent.url, "https://ws.audioscrobbler.com/2.0/");
+assert.equal(sent.body.get("api_key"), "lfmkey");
+assert.equal(sent.body.get("format"), "json");
+const base = "api_keylfmkeyartistBjörkmethodtrack.scrobbleskSesstimestamp123trackJóga".replace("skSess", "sksess") + "lfmsecret";
+assert.equal(sent.body.get("api_sig"), createHash("md5").update(base).digest("hex"));
+
+// only the app's own methods get signed
+for (const method of ["user.getInfo", "auth.getMobileSession", "", null]) {
+  sent = null;
+  r = await post(method === null ? { artist: "x" } : { method }, "/lastfm");
+  assert.equal(r.status, 400);
+  assert.equal(sent, null);
+}
+r = await post({ method: "track.scrobble" }, "/lastfm");
+assert.ok(!(await r.text()).includes("lfmsecret"));
 
 console.log("worker ok");
