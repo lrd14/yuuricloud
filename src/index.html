@@ -430,7 +430,7 @@
                 <svg viewBox="0 0 24 24"><use href="#i-cloud" /></svg>
                 <span><span class="name">SoundCloud</span><span class="state"></span></span>
               </button>
-              <button data-int="slsk" data-status="slsk-status" class="desktop-only">
+              <button data-int="slsk" data-status="slsk-status">
                 <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
                 <span><span class="name">Soulseek</span><span class="state"></span></span>
               </button>
@@ -568,7 +568,12 @@
 
             <!-- Soulseek -->
             <section class="int-panel" data-int="slsk" hidden>
-              <p class="hint">
+              <p class="hint ios-only">
+                Search and download music from Soulseek in the Soulseek tab. Songs you download go into yuuricloud's
+                folder and show up in your library. iOS pauses apps in the background, so downloads only keep going
+                while yuuricloud is open or playing music.
+              </p>
+              <p class="hint desktop-only">
                 Search and download music from Soulseek in the Soulseek tab. yuuricloud does this through
                 <a href="#" data-open="https://github.com/slskd/slskd">slskd</a>, a free Soulseek program it can download
                 and run for you in the background.
@@ -590,7 +595,14 @@
 
               <h4 class="group-title">Account</h4>
               <div class="group">
-                <div class="row">
+                <div class="row desktop-only">
+                  <div>
+                    <div class="label">Built-in Soulseek client (test)</div>
+                    <div class="hint">Connect without slskd, the way the iPhone app does. Still being tested: turn it off to go back to slskd.</div>
+                  </div>
+                  <label class="switch"><input id="slsk-builtin" type="checkbox" /><span></span></label>
+                </div>
+                <div id="slsk-slskd-row" class="row desktop-only">
                   <div><div class="label">Run slskd for me</div><div class="hint">Turn off to use an slskd you already run yourself.</div></div>
                   <label class="switch"><input id="slsk-managed" type="checkbox" /><span></span></label>
                 </div>
@@ -601,7 +613,7 @@
                   </div>
                   <p class="hint group-status">A name nobody has taken yet becomes a new free account the first time you connect.</p>
                 </div>
-                <div id="slsk-external-fields" class="fields" hidden>
+                <div id="slsk-external-fields" class="fields desktop-only" hidden>
                   <label>slskd address<input id="slsk-url" type="text" spellcheck="false" autocomplete="off" placeholder="http://localhost:5030" /></label>
                   <label>API key<input id="slsk-key" type="password" spellcheck="false" autocomplete="off" /></label>
                 </div>
@@ -610,7 +622,7 @@
               <div id="slsk-managed-groups">
                 <h4 class="group-title">Downloads and sharing</h4>
                 <div class="group">
-                  <div class="row">
+                  <div class="row desktop-only">
                     <div><div class="label">Download folder</div><div id="slsk-folder" class="hint path"></div></div>
                     <div class="actions">
                       <button id="slsk-open" class="btn">Open</button>
@@ -620,15 +632,16 @@
                   <div class="row">
                     <div>
                       <div class="label">Share my music library</div>
-                      <div class="hint">Your Soulseek download folder is always shared. Many Soulseek users won't send files to people who share nothing.</div>
+                      <div class="hint desktop-only">Your Soulseek download folder is always shared. Many Soulseek users won't send files to people who share nothing.</div>
+                      <div class="hint ios-only">Share all the music in yuuricloud's folder, not just your Soulseek downloads. Many Soulseek users won't send files to people who share nothing.</div>
                     </div>
                     <label class="switch"><input id="slsk-share" type="checkbox" /><span></span></label>
                   </div>
                 </div>
 
-                <h4 class="group-title">Program and network</h4>
-                <div class="group">
-                  <div class="row">
+                <h4 class="group-title desktop-only">Program and network</h4>
+                <div class="group desktop-only">
+                  <div id="slsk-exe-row" class="row">
                     <div><div class="label">slskd program</div><div id="slsk-exe" class="hint path"></div></div>
                     <div class="actions">
                       <button id="slsk-get" class="btn">Download for me</button>
@@ -656,18 +669,9 @@
             <!-- Last.fm -->
             <section class="int-panel" data-int="lfm" hidden>
               <p class="hint">
-                Scrobble what you play to your Last.fm profile. You need your own API account:
-                <a href="#" data-open="https://www.last.fm/api/account/create">create one here</a>
-                (any name and description work), then paste its key and shared secret below.
+                Scrobble what you play to your Last.fm profile. Click <b>Connect</b>, approve access in the browser,
+                then click <b>I've approved it</b>.
               </p>
-              <h4 class="group-title">API keys</h4>
-              <div class="group">
-                <div id="lfm-keys" class="fields">
-                  <label>API key<input id="lfm-key" type="text" spellcheck="false" autocomplete="off" /></label>
-                  <label>Shared secret<input id="lfm-secret" type="password" spellcheck="false" autocomplete="off" /></label>
-                  <button id="lfm-save" class="btn">Save keys</button>
-                </div>
-              </div>
               <h4 class="group-title">Account</h4>
               <div class="group">
                 <div class="row">
@@ -683,6 +687,23 @@
                   <label class="switch"><input id="lfm-scrobble" type="checkbox" /><span></span></label>
                 </div>
               </div>
+
+              <h4 class="group-title">Advanced</h4>
+              <div class="group">
+                <details id="lfm-own" class="own-app">
+                  <summary>Use your own Last.fm API account</summary>
+                  <p class="hint">
+                    Optional. <a href="#" data-open="https://www.last.fm/api/account/create">Create an API account</a>
+                    (any name and description work) and paste its key and shared secret below. Clear both and save to
+                    go back to the built-in account. Changing them signs you out of Last.fm here.
+                  </p>
+                  <div id="lfm-keys" class="fields">
+                    <label>API key<input id="lfm-key" type="text" spellcheck="false" autocomplete="off" /></label>
+                    <label>Shared secret<input id="lfm-secret" type="password" spellcheck="false" autocomplete="off" /></label>
+                    <button id="lfm-save" class="btn">Save keys</button>
+                  </div>
+                </details>
+              </div>
             </section>
 
             <!-- Discord -->
@@ -690,7 +711,7 @@
               <p class="hint">
                 Show what you're listening to on your Discord profile. Discord needs an application to show the status:
                 <a href="#" data-open="https://discord.com/developers/applications">create one</a>, name it what you want
-                the status to say (e.g. “yuuricloud”), and paste its Application ID here. If Last.fm keys are set, album
+                the status to say (e.g. “yuuricloud”), and paste its Application ID here. When Last.fm is available, album
                 covers are shown too.
               </p>
               <h4 class="group-title">Application</h4>
@@ -757,9 +778,8 @@
             <section class="ob-page" data-step="lfm" hidden>
               <h2>Last.fm</h2>
               <p class="hint">
-                Scrobble what you play to your Last.fm profile. You need your own API account:
-                <a href="#" data-open="https://www.last.fm/api/account/create">create one here</a> (any name works),
-                paste its key and shared secret, save, then connect.
+                Scrobble what you play to your Last.fm profile. Click <b>Connect</b>, approve access in the browser,
+                then click <b>I've approved it</b>.
               </p>
               <div class="ob-borrow" data-borrow="lfm"></div>
             </section>

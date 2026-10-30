@@ -33,6 +33,8 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 base64 = "0.22"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# The Soulseek client the iOS app has built in, since iOS can't run slskd.
+soulseek-rs-lib = "19.1"
 
 # Opens the app from the QR code a computer shows to sign this phone in to SoundCloud.
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]

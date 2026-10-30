@@ -130,9 +130,15 @@ and checks it against the SHA-256 checksum GitHub publishes before using it.
 
 ### Last.fm
 
-1. Create an API account at https://www.last.fm/api/account/create (any name works).
-2. Settings → Integrations: paste the API key and shared secret, click **Save keys**.
-3. Click **Connect**, approve access in the browser, then click **I've approved it**.
+Settings → Integrations → Last.fm: click **Connect**, approve access in the browser, then click **I've approved it**.
+
+By default this uses yuuricloud's shared Last.fm API account. Last.fm signs every scrobble with the account's shared
+secret, so those calls go through the same Cloudflare Worker as SoundCloud's sign-in, which adds the signature; see
+[soundcloud-proxy/README.md](soundcloud-proxy/README.md). Until `BUILTIN_LASTFM_KEY` in
+`src-tauri/src/integrations.rs` is set, everyone needs their own API account.
+
+**Your own API account (optional).** Create one at https://www.last.fm/api/account/create (any name works), then
+under **Use your own Last.fm API account** paste its key and shared secret and click **Save keys**.
 
 Songs scrobble after half their length or 4 minutes (whichever comes first); songs under 30 seconds don't count.
 
@@ -142,7 +148,7 @@ Songs scrobble after half their length or 4 minutes (whichever comes first); son
    ("Listening to yuuricloud").
 2. Settings → Integrations: paste its Application ID and turn on **Show listening status**. Discord must be running.
 
-If Last.fm keys are set, the status also shows the album cover from Last.fm (Discord can't show local images).
+When Last.fm is available, the status also shows the album cover from Last.fm (Discord can't show local images).
 
 Keys, the Last.fm session, the SoundCloud login and the Soulseek login are stored in `settings.json` in the app
 data folder.
@@ -150,7 +156,8 @@ data folder.
 
 ## iPhone and iPad
 
-The iOS version plays your music and your SoundCloud. Soulseek, downloads and Discord stay on the computer.
+The iOS version plays your music and your SoundCloud, and searches and downloads from Soulseek. SoundCloud
+downloads and Discord stay on the computer.
 
 - **Install:** each release has a `yuuricloud_x.y.z_iOS-unsigned.ipa`. Install it with [AltStore](https://altstore.io) or
   [SideStore](https://sidestore.io), which sign it with your Apple ID (with a free Apple ID, reinstall it every 7 days).
@@ -160,6 +167,10 @@ The iOS version plays your music and your SoundCloud. Soulseek, downloads and Di
 - **SoundCloud:** on the computer, open Settings → Integrations → SoundCloud and click **Link phone…**. After approving
   in the browser, scan the QR code with the iPhone's camera, or copy the code and paste it on the phone. The phone gets a
   login of its own; the computer stays signed in. Anyone with the code can use your account, so don't share it.
+- **Soulseek:** the app is its own Soulseek client on iOS, since iOS can't run slskd (it uses
+  [soulseek-rs](https://github.com/michel/soulseek-rs)). Enter your login under Settings → Integrations → Soulseek
+  and connect. Downloads go to a `Soulseek` folder inside yuuricloud's folder and show up in the library. iOS pauses
+  apps in the background, so downloads only keep going while yuuricloud is open or playing music.
 - On a phone the library shows one panel at a time: tap to play, hold a song for its menu. An unfolded iPhone Duo and
   iPads show all three panels.
 

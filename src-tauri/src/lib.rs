@@ -7,6 +7,7 @@ mod editor;
 mod integrations;
 mod library;
 mod slsk;
+mod slsk_native;
 mod soundcloud;
 mod tools;
 mod waveform;
@@ -204,6 +205,12 @@ async fn lastfm_finish_auth(state: State<'_, AppState>) -> Result<Settings, Stri
     Ok(s.clone())
 }
 
+/// Whether the shared Last.fm account is set up, so users can connect without their own keys.
+#[tauri::command]
+fn lastfm_builtin() -> bool {
+    integrations::lastfm_builtin_available()
+}
+
 #[tauri::command]
 fn lastfm_disconnect(state: State<AppState>) -> Settings {
     let mut s = state.settings.lock().unwrap();
@@ -277,7 +284,7 @@ async fn discord_update(
         // SoundCloud songs bring their own artwork URL.
         let image = if track.image.is_some() {
             track.image.clone()
-        } else if lastfm_cfg.api_key.is_empty() {
+        } else if !lastfm_cfg.has_key() {
             None
         } else {
             let key = format!("{}\0{}", track.album_artist, track.album);
@@ -565,11 +572,16 @@ fn download_folder(app: &AppHandle, cfg: &downloads::DownloadConfig) -> PathBuf 
 }
 
 /// Folders that are always part of the library: where SoundCloud and Soulseek downloads go,
-/// once they exist, and on iOS the app's own folder. Returned as (path, label).
+/// once they exist, or on iOS the app's own folder. Returned as (path, label).
 fn auto_folders(app: &AppHandle, s: &Settings) -> Vec<(PathBuf, &'static str)> {
-    let all = [(download_folder(app, &s.downloads), "SoundCloud downloads"), (slsk_download_folder(app, &s.soulseek), "Soulseek downloads")];
+    // iOS keeps Soulseek downloads inside the app's folder, so that one folder covers them
     #[cfg(target_os = "ios")]
-    let all = std::iter::once((phone_music_folder(app), "yuuricloud folder in the Files app")).chain(all);
+    let all = {
+        let _ = s;
+        [(phone_music_folder(app), "yuuricloud folder in the Files app")]
+    };
+    #[cfg(not(target_os = "ios"))]
+    let all = [(download_folder(app, &s.downloads), "SoundCloud downloads"), (slsk_download_folder(app, &s.soulseek), "Soulseek downloads")];
     all.into_iter().filter(|(p, _)| p.is_dir()).collect()
 }
 
@@ -741,13 +753,22 @@ fn tool_cancel(state: State<AppState>) {
 
 // ---------------------------------------------------------------- Soulseek
 
-/// Where Soulseek downloads go: the chosen folder, or Music/Soulseek.
+/// Where Soulseek downloads go: the chosen folder, or Music/Soulseek. On iOS, a Soulseek folder in
+/// the app's own folder, so downloads are in the library and the Files app.
 fn slsk_download_folder(app: &AppHandle, cfg: &slsk::SlskConfig) -> PathBuf {
-    if !cfg.folder.is_empty() {
-        return PathBuf::from(&cfg.folder);
+    #[cfg(target_os = "ios")]
+    {
+        let _ = cfg;
+        phone_music_folder(app).join("Soulseek")
     }
-    let music = app.path().audio_dir().unwrap_or_else(|_| app.path().home_dir().unwrap_or_default().join("Music"));
-    music.join("Soulseek")
+    #[cfg(not(target_os = "ios"))]
+    {
+        if !cfg.folder.is_empty() {
+            return PathBuf::from(&cfg.folder);
+        }
+        let music = app.path().audio_dir().unwrap_or_else(|_| app.path().home_dir().unwrap_or_default().join("Music"));
+        music.join("Soulseek")
+    }
 }
 
 /// Folders to share: the download folder plus, if wanted, the library folders. Folders inside
@@ -766,6 +787,21 @@ fn slsk_shares(settings: &Settings, downloads: &Path) -> Vec<String> {
         out.push(p);
     }
     out.into_iter().map(|p| p.to_string_lossy().into_owned()).collect()
+}
+
+/// What the built-in Soulseek client shares. On iOS "share my library" means the app's whole
+/// folder, which the downloads are inside of.
+fn builtin_shares(app: &AppHandle, settings: &Settings, downloads: &Path) -> Vec<String> {
+    #[cfg(target_os = "ios")]
+    {
+        let folder = if settings.soulseek.share_library { phone_music_folder(app) } else { downloads.to_path_buf() };
+        vec![folder.to_string_lossy().into_owned()]
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = app;
+        slsk_shares(settings, downloads)
+    }
 }
 
 /// Run `f` with the slskd connection, or say that Soulseek isn't connected.
@@ -815,7 +851,11 @@ async fn slsk_connect(app: AppHandle) -> Result<serde_json::Value, String> {
         state.slsk.lock().unwrap().take(); // stop the old one first: it holds the Soulseek port
         let settings = state.settings.lock().unwrap().clone();
         let cfg = &settings.soulseek;
-        let conn = if cfg.external {
+        // iOS can't run slskd, so the app is the Soulseek client itself there
+        let conn = if cfg!(target_os = "ios") || cfg.builtin {
+            let downloads = slsk_download_folder(&app, cfg);
+            slsk::connect_native(cfg, &downloads, &builtin_shares(&app, &settings, &downloads))?
+        } else if cfg.external {
             slsk::connect_external(cfg)?
         } else {
             let downloads = slsk_download_folder(&app, cfg);
@@ -1182,6 +1222,7 @@ pub fn run() {
             lastfm_begin_auth,
             lastfm_finish_auth,
             lastfm_disconnect,
+            lastfm_builtin,
             lastfm_set_scrobble,
             lastfm_now_playing,
             lastfm_scrobble,

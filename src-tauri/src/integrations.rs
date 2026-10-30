@@ -1,7 +1,10 @@
 //! Last.fm scrobbling and Discord Rich Presence.
 //!
-//! Both need credentials from the user: a Last.fm API account (key + secret) and a Discord
-//! application (client ID). Calls here block, so commands run them off the main thread.
+//! Last.fm works through yuuricloud's shared API account by default: its key is built in, and the
+//! calls that need its shared secret are signed by the same proxy the shared SoundCloud app uses
+//! (see `soundcloud-proxy/`). Users can paste their own API account's key and secret instead.
+//! Discord needs an application (client ID) from the user. Calls here block, so commands run them
+//! off the main thread.
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,6 +22,22 @@ pub struct LastfmConfig {
     pub session_key: String,
     pub username: String,
     pub scrobble: bool,
+}
+
+impl LastfmConfig {
+    /// The user pasted the key and secret of their own API account; otherwise the shared one is used.
+    pub fn own_app(&self) -> bool {
+        !self.api_key.is_empty() && !self.api_secret.is_empty()
+    }
+
+    fn app_key(&self) -> &str {
+        if self.own_app() { &self.api_key } else { BUILTIN_LASTFM_KEY }
+    }
+
+    /// There's an API key to call Last.fm with: the user's own or the shared one.
+    pub fn has_key(&self) -> bool {
+        !self.app_key().is_empty() && (self.own_app() || lastfm_builtin_available())
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -49,6 +68,13 @@ pub fn unix_now() -> i64 {
 // --------------------------------------------------------------------- Last.fm
 
 const LASTFM_API: &str = "https://ws.audioscrobbler.com/2.0/";
+/// The shared Last.fm API account's key. Public: it is part of every sign-in link anyway. Empty
+/// turns the shared account off, so users need their own keys.
+pub const BUILTIN_LASTFM_KEY: &str = "efeac10d988e63499c24372533fdba5c";
+
+pub fn lastfm_builtin_available() -> bool {
+    !BUILTIN_LASTFM_KEY.is_empty() && !crate::soundcloud::BUILTIN_TOKEN_PROXY.is_empty()
+}
 
 fn agent() -> ureq::Agent {
     // Last.fm reports errors as JSON with a 4xx status; read the body instead of failing early.
@@ -59,22 +85,28 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// Call a Last.fm API method. Signed calls add `api_sig` as the API docs describe.
+/// Call a Last.fm API method. Signed calls add `api_sig` as the API docs describe; with the shared
+/// account, the proxy adds the key and signature instead, since only it knows the secret.
 fn lastfm_call(cfg: &LastfmConfig, method: &str, mut params: BTreeMap<&str, String>, signed: bool) -> Result<Value, String> {
-    if cfg.api_key.is_empty() {
+    if !cfg.has_key() {
         return Err("Add your Last.fm API key first".into());
     }
     params.insert("method", method.to_string());
-    params.insert("api_key", cfg.api_key.clone());
-    if signed {
-        let mut base: String = params.iter().map(|(k, v)| format!("{k}{v}")).collect();
-        base.push_str(&cfg.api_secret);
-        params.insert("api_sig", format!("{:x}", md5::compute(base)));
-    }
+    let url = if signed && !cfg.own_app() {
+        format!("{}/lastfm", crate::soundcloud::BUILTIN_TOKEN_PROXY.trim_end_matches('/'))
+    } else {
+        params.insert("api_key", cfg.app_key().to_string());
+        if signed {
+            let mut base: String = params.iter().map(|(k, v)| format!("{k}{v}")).collect();
+            base.push_str(&cfg.api_secret);
+            params.insert("api_sig", format!("{:x}", md5::compute(base)));
+        }
+        LASTFM_API.to_string()
+    };
     params.insert("format", "json".into());
 
     let mut response = agent()
-        .post(LASTFM_API)
+        .post(&url)
         .send_form(params.iter().map(|(k, v)| (*k, v.as_str())))
         .map_err(|e| format!("Couldn't reach Last.fm: {e}"))?;
     let json: Value = response.body_mut().read_json().map_err(|e| format!("Bad reply from Last.fm: {e}"))?;
@@ -90,7 +122,7 @@ pub fn lastfm_get_token(cfg: &LastfmConfig) -> Result<String, String> {
 }
 
 pub fn lastfm_auth_url(cfg: &LastfmConfig, token: &str) -> String {
-    format!("https://www.last.fm/api/auth/?api_key={}&token={}", cfg.api_key, token)
+    format!("https://www.last.fm/api/auth/?api_key={}&token={}", cfg.app_key(), token)
 }
 
 /// Exchange an approved token for a session. Returns (username, session key).

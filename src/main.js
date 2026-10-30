@@ -1189,16 +1189,23 @@ function discordSync() {
 }
 
 let lastfmPending = false;
+let lastfmBuiltin = false; // the shared Last.fm account is available, no own keys needed
+invoke("lastfm_builtin").then((on) => {
+  lastfmBuiltin = on;
+  renderIntegrations();
+});
 function renderIntegrations() {
   const lf = state.settings.lastfm || {}, dc = state.settings.discord || {};
   const connected = !!lf.sessionKey;
+  const ownKeys = !!(lf.apiKey && lf.apiSecret);
   const status = $("lfm-status");
   status.className = "hint" + (connected ? " ok" : "");
-  status.textContent = connected ? `Connected as ${lf.username}`
+  status.textContent = connected ? `Connected as ${lf.username}${ownKeys ? " (your own API account)" : ""}`
     : lastfmPending ? "Approve access in the browser window that opened, then click “I've approved it”."
-    : lf.apiKey ? "Not connected" : "Add your API key and shared secret first.";
+    : ownKeys ? "Not connected — using your own API account" : lastfmBuiltin ? "Not connected" : "Add your API key and shared secret below first.";
+  if (!lastfmBuiltin && !ownKeys) $("lfm-own").open = true;
   $("lfm-connect").hidden = connected;
-  $("lfm-connect").disabled = !lf.apiKey || !lf.apiSecret;
+  $("lfm-connect").disabled = !ownKeys && !lastfmBuiltin;
   $("lfm-finish").hidden = connected || !lastfmPending;
   $("lfm-disconnect").hidden = !connected;
   $("lfm-scrobble").checked = !!lf.scrobble;
@@ -2349,12 +2356,15 @@ const SLSK_MAX_SEARCHES = 12;
 
 // Function declarations, not consts: renderDownloads (earlier in the file) runs while the file
 // is still loading and already needs some of these.
+/** The Soulseek client built into the app, instead of slskd: always on iOS, a test switch elsewhere. */
+const slskBuiltin = () => ios || !!state.settings.soulseek?.builtin;
+
 function slskLoggedIn() {
   return !!state.slsk.status?.loggedIn;
 }
 function slskConfigured() {
   const c = state.settings.soulseek || {};
-  return c.external ? !!c.url : !!(c.username && c.password);
+  return c.external && !slskBuiltin() ? !!c.url : !!(c.username && c.password);
 }
 function baseName(p) {
   return p.split(/[\\/]/).filter(Boolean).pop() || p;
@@ -2411,7 +2421,7 @@ async function pollSlskStatus() {
 
 function slskStatusText() {
   const s = state.slsk, st = s.status;
-  if (s.connecting) return "Starting slskd…";
+  if (s.connecting) return slskBuiltin() ? "Connecting to Soulseek…" : "Starting slskd…";
   if (!st) return s.error || "Not connected";
   if (st.loggedIn) {
     const port = st.listenPort ? ` · listening on port ${st.listenPort}` : "";
@@ -2420,7 +2430,7 @@ function slskStatusText() {
     return `Connected as ${st.username || state.settings.soulseek?.username}${port}${up}`;
   }
   if (st.busy) return "Logging in to Soulseek…";
-  return `slskd is running but not logged in (${st.state || "disconnected"}). Check the username and password.`;
+  return `${slskBuiltin() ? "Soulseek" : "slskd is running but"} not logged in (${st.state || "disconnected"}). Check the username and password.`;
 }
 
 // ------------------------------------------------------------ the view
@@ -2925,7 +2935,7 @@ function renderSlskTransfers() {
     const cls = slskOk(x) ? "saved" : failed ? "failed" : "";
     const bar = x.state.includes("InProgress") && x.size ? `<div class="dl-bar small"><i style="width:${(x.bytes / x.size) * 100}%"></i></div>` : "";
     const actions = !slskDone(x) ? `<button class="icon-btn" data-act="slsk-cancel" title="Cancel"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`
-      : (x.path ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
+      : (x.path && !ios ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
         (failed ? `<button class="btn small" data-act="slsk-retry">Retry</button>` : "") +
         `<button class="icon-btn" data-act="slsk-remove" title="Remove from list"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`;
     const name = baseName(x.filename);
@@ -2965,10 +2975,15 @@ function renderSlskSettings() {
   $("slsk-connect").textContent = s.status ? "Reconnect" : "Connect";
   $("slsk-connect").disabled = s.connecting;
   $("slsk-disconnect").hidden = !s.status;
+  // the built-in client needs only the login, like slskd run for you
+  const external = !!c.external && !c.builtin;
+  $("slsk-builtin").checked = !!c.builtin;
+  $("slsk-slskd-row").hidden = !!c.builtin;
+  $("slsk-exe-row").hidden = !!c.builtin;
   $("slsk-managed").checked = !c.external;
-  $("slsk-managed-fields").hidden = !!c.external;
-  $("slsk-external-fields").hidden = !c.external;
-  $("slsk-managed-groups").hidden = !!c.external;
+  $("slsk-managed-fields").hidden = external;
+  $("slsk-external-fields").hidden = !external;
+  $("slsk-managed-groups").hidden = external;
   $("slsk-share").checked = c.shareLibrary !== false;
   $("slsk-auto").checked = !!c.autoConnect;
   $("slsk-exe").textContent = c.exePath || "Not installed yet";
@@ -2992,12 +3007,13 @@ async function saveSlskConfig() {
       shareLibrary: $("slsk-share").checked,
       listenPort: Number($("slsk-port").value) || 0,
       autoConnect: $("slsk-auto").checked,
+      builtin: $("slsk-builtin").checked,
     },
   });
   renderSlskSettings();
 }
 
-for (const id of ["slsk-managed", "slsk-share", "slsk-auto", "slsk-user", "slsk-pass", "slsk-port", "slsk-url", "slsk-key"]) {
+for (const id of ["slsk-builtin", "slsk-managed", "slsk-share", "slsk-auto", "slsk-user", "slsk-pass", "slsk-port", "slsk-url", "slsk-key"]) {
   $(id).addEventListener("change", saveSlskConfig);
 }
 $("slsk-connect").addEventListener("click", async () => {
@@ -3105,7 +3121,7 @@ function onboardParts(step) {
     look: [row("accent-swatches")],
     sc: [group("sc-status")],
     slsk: [row("slsk-exe"), $("slsk-tool-status"), group("slsk-user"), row("slsk-status")],
-    lfm: [group("lfm-keys"), group("lfm-status")],
+    lfm: lastfmBuiltin ? [group("lfm-status")] : [group("lfm-keys"), group("lfm-status")],
     discord: [group("discord-id"), group("discord-status")],
   }[step]?.filter(Boolean) || [];
 }

@@ -699,8 +699,8 @@ tr.slsk-group.closed .caret { transform: rotate(-90deg); }
 /* -------------------------------------------------------------- iPhone and iPad */
 .back, .phone-only { display: none !important; }
 body:not(.ios) .ios-only { display: none !important; }
-body.ios .desktop-only, body.ios .win-controls, body.ios #downloads-btn, body.ios .search kbd, body.ios #add-folder,
-body.ios #source [data-source="slsk"], body.ios .volume, body.ios .local-hint { display: none !important; }
+body.ios .desktop-only, body.ios .win-controls, body.ios .search kbd, body.ios #add-folder, body.ios .volume,
+body.ios .local-hint, body.ios #dl-open-folder, body.ios #dl-open-slsk { display: none !important; }
 /* no see-through window here: a solid background, edge to edge, clear of the notch and home bar */
 html.ios, html.ios body { background: #101218; overflow: hidden; }
 body.ios {
@@ -738,6 +738,11 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
   body.ios .brand { width: auto; margin: 0; }
   body.ios .brand span { display: none; }
   body.ios .source-switch { margin: 0 auto 0 0; }
+  body.ios .source-switch button { padding: 5px 9px; }
+  /* the library rescans by itself when you come back to the app, so Rescan gives its room to the
+     three sources */
+  body.ios #rescan { display: none; }
+  body.ios .titlebar .icon-btn { width: 32px; }
   body.ios .titlebar .search { order: 10; flex: 1 1 100%; max-width: none; margin: 0; }
   body.ios .search input { padding: 8px 0; }
 
@@ -776,6 +781,11 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
   body.ios .row { gap: 14px; }
   body.ios .pref-range { flex-basis: 110px; }
   body.ios .phone-code { flex-direction: column; align-items: flex-start; }
+}
+
+/* the smaller iPhones: the logo makes room for the three sources and the buttons */
+@media (max-width: 380px) {
+  body.ios .brand { display: none; }
 }
 
 
