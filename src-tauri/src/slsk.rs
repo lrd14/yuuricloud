@@ -39,6 +39,8 @@ pub struct SlskConfig {
     pub listen_port: u16,
     /// Start Soulseek when yuuricloud opens.
     pub auto_connect: bool,
+    /// Use the Soulseek client built into the app instead of slskd (always, on iOS).
+    pub builtin: bool,
 }
 
 impl Default for SlskConfig {
@@ -54,6 +56,7 @@ impl Default for SlskConfig {
             share_library: true,
             listen_port: 0,
             auto_connect: false,
+            builtin: false,
         }
     }
 }
@@ -326,8 +329,7 @@ pub fn connect_external(cfg: &SlskConfig) -> Result<Conn, String> {
     Ok(conn)
 }
 
-/// iOS: log in with the Soulseek client built into the app (see `slsk_native`).
-#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+/// Log in with the Soulseek client built into the app (see `slsk_native`).
 pub fn connect_native(cfg: &SlskConfig, downloads: &Path, shares: &[String]) -> Result<Conn, String> {
     let native = crate::slsk_native::connect(cfg, downloads, shares)?;
     Ok(Conn {

@@ -783,6 +783,21 @@ fn slsk_shares(settings: &Settings, downloads: &Path) -> Vec<String> {
     out.into_iter().map(|p| p.to_string_lossy().into_owned()).collect()
 }
 
+/// What the built-in Soulseek client shares. On iOS "share my library" means the app's whole
+/// folder, which the downloads are inside of.
+fn builtin_shares(app: &AppHandle, settings: &Settings, downloads: &Path) -> Vec<String> {
+    #[cfg(target_os = "ios")]
+    {
+        let folder = if settings.soulseek.share_library { phone_music_folder(app) } else { downloads.to_path_buf() };
+        vec![folder.to_string_lossy().into_owned()]
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = app;
+        slsk_shares(settings, downloads)
+    }
+}
+
 /// Run `f` with the slskd connection, or say that Soulseek isn't connected.
 async fn with_slsk<T: Send + 'static>(
     app: AppHandle,
@@ -831,15 +846,10 @@ async fn slsk_connect(app: AppHandle) -> Result<serde_json::Value, String> {
         let settings = state.settings.lock().unwrap().clone();
         let cfg = &settings.soulseek;
         // iOS can't run slskd, so the app is the Soulseek client itself there
-        #[cfg(target_os = "ios")]
-        let conn = {
+        let conn = if cfg!(target_os = "ios") || cfg.builtin {
             let downloads = slsk_download_folder(&app, cfg);
-            let shares = if cfg.share_library { vec![phone_music_folder(&app)] } else { vec![downloads.clone()] };
-            let shares: Vec<String> = shares.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-            slsk::connect_native(cfg, &downloads, &shares)?
-        };
-        #[cfg(not(target_os = "ios"))]
-        let conn = if cfg.external {
+            slsk::connect_native(cfg, &downloads, &builtin_shares(&app, &settings, &downloads))?
+        } else if cfg.external {
             slsk::connect_external(cfg)?
         } else {
             let downloads = slsk_download_folder(&app, cfg);

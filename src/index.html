@@ -596,6 +596,13 @@
               <h4 class="group-title">Account</h4>
               <div class="group">
                 <div class="row desktop-only">
+                  <div>
+                    <div class="label">Built-in Soulseek client (test)</div>
+                    <div class="hint">Connect without slskd, the way the iPhone app does. Still being tested: turn it off to go back to slskd.</div>
+                  </div>
+                  <label class="switch"><input id="slsk-builtin" type="checkbox" /><span></span></label>
+                </div>
+                <div id="slsk-slskd-row" class="row desktop-only">
                   <div><div class="label">Run slskd for me</div><div class="hint">Turn off to use an slskd you already run yourself.</div></div>
                   <label class="switch"><input id="slsk-managed" type="checkbox" /><span></span></label>
                 </div>
@@ -634,7 +641,7 @@
 
                 <h4 class="group-title desktop-only">Program and network</h4>
                 <div class="group desktop-only">
-                  <div class="row">
+                  <div id="slsk-exe-row" class="row">
                     <div><div class="label">slskd program</div><div id="slsk-exe" class="hint path"></div></div>
                     <div class="actions">
                       <button id="slsk-get" class="btn">Download for me</button>

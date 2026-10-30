@@ -2349,12 +2349,15 @@ const SLSK_MAX_SEARCHES = 12;
 
 // Function declarations, not consts: renderDownloads (earlier in the file) runs while the file
 // is still loading and already needs some of these.
+/** The Soulseek client built into the app, instead of slskd: always on iOS, a test switch elsewhere. */
+const slskBuiltin = () => ios || !!state.settings.soulseek?.builtin;
+
 function slskLoggedIn() {
   return !!state.slsk.status?.loggedIn;
 }
 function slskConfigured() {
   const c = state.settings.soulseek || {};
-  return c.external ? !!c.url : !!(c.username && c.password);
+  return c.external && !slskBuiltin() ? !!c.url : !!(c.username && c.password);
 }
 function baseName(p) {
   return p.split(/[\\/]/).filter(Boolean).pop() || p;
@@ -2411,7 +2414,7 @@ async function pollSlskStatus() {
 
 function slskStatusText() {
   const s = state.slsk, st = s.status;
-  if (s.connecting) return ios ? "Connecting to Soulseek…" : "Starting slskd…";
+  if (s.connecting) return slskBuiltin() ? "Connecting to Soulseek…" : "Starting slskd…";
   if (!st) return s.error || "Not connected";
   if (st.loggedIn) {
     const port = st.listenPort ? ` · listening on port ${st.listenPort}` : "";
@@ -2420,7 +2423,7 @@ function slskStatusText() {
     return `Connected as ${st.username || state.settings.soulseek?.username}${port}${up}`;
   }
   if (st.busy) return "Logging in to Soulseek…";
-  return `${ios ? "Soulseek" : "slskd is running but"} not logged in (${st.state || "disconnected"}). Check the username and password.`;
+  return `${slskBuiltin() ? "Soulseek" : "slskd is running but"} not logged in (${st.state || "disconnected"}). Check the username and password.`;
 }
 
 // ------------------------------------------------------------ the view
@@ -2965,10 +2968,15 @@ function renderSlskSettings() {
   $("slsk-connect").textContent = s.status ? "Reconnect" : "Connect";
   $("slsk-connect").disabled = s.connecting;
   $("slsk-disconnect").hidden = !s.status;
+  // the built-in client needs only the login, like slskd run for you
+  const external = !!c.external && !c.builtin;
+  $("slsk-builtin").checked = !!c.builtin;
+  $("slsk-slskd-row").hidden = !!c.builtin;
+  $("slsk-exe-row").hidden = !!c.builtin;
   $("slsk-managed").checked = !c.external;
-  $("slsk-managed-fields").hidden = !!c.external;
-  $("slsk-external-fields").hidden = !c.external;
-  $("slsk-managed-groups").hidden = !!c.external;
+  $("slsk-managed-fields").hidden = external;
+  $("slsk-external-fields").hidden = !external;
+  $("slsk-managed-groups").hidden = external;
   $("slsk-share").checked = c.shareLibrary !== false;
   $("slsk-auto").checked = !!c.autoConnect;
   $("slsk-exe").textContent = c.exePath || "Not installed yet";
@@ -2992,12 +3000,13 @@ async function saveSlskConfig() {
       shareLibrary: $("slsk-share").checked,
       listenPort: Number($("slsk-port").value) || 0,
       autoConnect: $("slsk-auto").checked,
+      builtin: $("slsk-builtin").checked,
     },
   });
   renderSlskSettings();
 }
 
-for (const id of ["slsk-managed", "slsk-share", "slsk-auto", "slsk-user", "slsk-pass", "slsk-port", "slsk-url", "slsk-key"]) {
+for (const id of ["slsk-builtin", "slsk-managed", "slsk-share", "slsk-auto", "slsk-user", "slsk-pass", "slsk-port", "slsk-url", "slsk-key"]) {
   $(id).addEventListener("change", saveSlskConfig);
 }
 $("slsk-connect").addEventListener("click", async () => {
