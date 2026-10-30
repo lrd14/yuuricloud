@@ -656,18 +656,9 @@
             <!-- Last.fm -->
             <section class="int-panel" data-int="lfm" hidden>
               <p class="hint">
-                Scrobble what you play to your Last.fm profile. You need your own API account:
-                <a href="#" data-open="https://www.last.fm/api/account/create">create one here</a>
-                (any name and description work), then paste its key and shared secret below.
+                Scrobble what you play to your Last.fm profile. Click <b>Connect</b>, approve access in the browser,
+                then click <b>I've approved it</b>.
               </p>
-              <h4 class="group-title">API keys</h4>
-              <div class="group">
-                <div id="lfm-keys" class="fields">
-                  <label>API key<input id="lfm-key" type="text" spellcheck="false" autocomplete="off" /></label>
-                  <label>Shared secret<input id="lfm-secret" type="password" spellcheck="false" autocomplete="off" /></label>
-                  <button id="lfm-save" class="btn">Save keys</button>
-                </div>
-              </div>
               <h4 class="group-title">Account</h4>
               <div class="group">
                 <div class="row">
@@ -683,6 +674,23 @@
                   <label class="switch"><input id="lfm-scrobble" type="checkbox" /><span></span></label>
                 </div>
               </div>
+
+              <h4 class="group-title">Advanced</h4>
+              <div class="group">
+                <details id="lfm-own" class="own-app">
+                  <summary>Use your own Last.fm API account</summary>
+                  <p class="hint">
+                    Optional. <a href="#" data-open="https://www.last.fm/api/account/create">Create an API account</a>
+                    (any name and description work) and paste its key and shared secret below. Clear both and save to
+                    go back to the built-in account. Changing them signs you out of Last.fm here.
+                  </p>
+                  <div id="lfm-keys" class="fields">
+                    <label>API key<input id="lfm-key" type="text" spellcheck="false" autocomplete="off" /></label>
+                    <label>Shared secret<input id="lfm-secret" type="password" spellcheck="false" autocomplete="off" /></label>
+                    <button id="lfm-save" class="btn">Save keys</button>
+                  </div>
+                </details>
+              </div>
             </section>
 
             <!-- Discord -->
@@ -690,7 +698,7 @@
               <p class="hint">
                 Show what you're listening to on your Discord profile. Discord needs an application to show the status:
                 <a href="#" data-open="https://discord.com/developers/applications">create one</a>, name it what you want
-                the status to say (e.g. “yuuricloud”), and paste its Application ID here. If Last.fm keys are set, album
+                the status to say (e.g. “yuuricloud”), and paste its Application ID here. When Last.fm is available, album
                 covers are shown too.
               </p>
               <h4 class="group-title">Application</h4>
@@ -757,9 +765,8 @@
             <section class="ob-page" data-step="lfm" hidden>
               <h2>Last.fm</h2>
               <p class="hint">
-                Scrobble what you play to your Last.fm profile. You need your own API account:
-                <a href="#" data-open="https://www.last.fm/api/account/create">create one here</a> (any name works),
-                paste its key and shared secret, save, then connect.
+                Scrobble what you play to your Last.fm profile. Click <b>Connect</b>, approve access in the browser,
+                then click <b>I've approved it</b>.
               </p>
               <div class="ob-borrow" data-borrow="lfm"></div>
             </section>

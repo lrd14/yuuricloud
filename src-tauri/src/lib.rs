@@ -204,6 +204,12 @@ async fn lastfm_finish_auth(state: State<'_, AppState>) -> Result<Settings, Stri
     Ok(s.clone())
 }
 
+/// Whether the shared Last.fm account is set up, so users can connect without their own keys.
+#[tauri::command]
+fn lastfm_builtin() -> bool {
+    integrations::lastfm_builtin_available()
+}
+
 #[tauri::command]
 fn lastfm_disconnect(state: State<AppState>) -> Settings {
     let mut s = state.settings.lock().unwrap();
@@ -277,7 +283,7 @@ async fn discord_update(
         // SoundCloud songs bring their own artwork URL.
         let image = if track.image.is_some() {
             track.image.clone()
-        } else if lastfm_cfg.api_key.is_empty() {
+        } else if !lastfm_cfg.has_key() {
             None
         } else {
             let key = format!("{}\0{}", track.album_artist, track.album);
@@ -1182,6 +1188,7 @@ pub fn run() {
             lastfm_begin_auth,
             lastfm_finish_auth,
             lastfm_disconnect,
+            lastfm_builtin,
             lastfm_set_scrobble,
             lastfm_now_playing,
             lastfm_scrobble,

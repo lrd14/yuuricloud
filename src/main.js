@@ -1189,16 +1189,23 @@ function discordSync() {
 }
 
 let lastfmPending = false;
+let lastfmBuiltin = false; // the shared Last.fm account is available, no own keys needed
+invoke("lastfm_builtin").then((on) => {
+  lastfmBuiltin = on;
+  renderIntegrations();
+});
 function renderIntegrations() {
   const lf = state.settings.lastfm || {}, dc = state.settings.discord || {};
   const connected = !!lf.sessionKey;
+  const ownKeys = !!(lf.apiKey && lf.apiSecret);
   const status = $("lfm-status");
   status.className = "hint" + (connected ? " ok" : "");
-  status.textContent = connected ? `Connected as ${lf.username}`
+  status.textContent = connected ? `Connected as ${lf.username}${ownKeys ? " (your own API account)" : ""}`
     : lastfmPending ? "Approve access in the browser window that opened, then click “I've approved it”."
-    : lf.apiKey ? "Not connected" : "Add your API key and shared secret first.";
+    : ownKeys ? "Not connected — using your own API account" : lastfmBuiltin ? "Not connected" : "Add your API key and shared secret below first.";
+  if (!lastfmBuiltin && !ownKeys) $("lfm-own").open = true;
   $("lfm-connect").hidden = connected;
-  $("lfm-connect").disabled = !lf.apiKey || !lf.apiSecret;
+  $("lfm-connect").disabled = !ownKeys && !lastfmBuiltin;
   $("lfm-finish").hidden = connected || !lastfmPending;
   $("lfm-disconnect").hidden = !connected;
   $("lfm-scrobble").checked = !!lf.scrobble;
@@ -3105,7 +3112,7 @@ function onboardParts(step) {
     look: [row("accent-swatches")],
     sc: [group("sc-status")],
     slsk: [row("slsk-exe"), $("slsk-tool-status"), group("slsk-user"), row("slsk-status")],
-    lfm: [group("lfm-keys"), group("lfm-status")],
+    lfm: lastfmBuiltin ? [group("lfm-status")] : [group("lfm-keys"), group("lfm-status")],
     discord: [group("discord-id"), group("discord-status")],
   }[step]?.filter(Boolean) || [];
 }

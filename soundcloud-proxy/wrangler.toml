@@ -3,6 +3,9 @@ main = "worker.js"
 compatibility_date = "2025-06-01"
 
 [vars]
-# Public values. The Client Secret is NOT set here: run `npx wrangler secret put SC_CLIENT_SECRET`.
+# Public values. The secrets are NOT set here: run `npx wrangler secret put SC_CLIENT_SECRET` and
+# `npx wrangler secret put LASTFM_SECRET`.
 SC_CLIENT_ID = "ChGXzMzf6bueI7rU1XUuM0tr5c89v0Nl"
 ALLOWED_REDIRECT = "http://127.0.0.1:8974/callback"
+# Must match BUILTIN_LASTFM_KEY in src-tauri/src/integrations.rs
+LASTFM_API_KEY = ""
