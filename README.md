@@ -157,7 +157,10 @@ SoundCloud.
 
 <p align="center"><img src="docs/soundcloud.png" alt="SoundCloud likes shown as cover cards, with playlists on the left" width="820"></p>
 
-**On an iPhone:** the phone signs in through yuuricloud on your computer:
+**On an iPhone:** Settings → Integrations → SoundCloud → **Connect**. Safari opens SoundCloud; sign in and
+approve, then tap **Open yuuricloud** and allow it. The app finishes signing in by itself.
+
+Already signed in on your computer? You can link the phone from there instead:
 
 1. On the computer, open Settings → Integrations → SoundCloud and click **Link phone…**, then approve in the
    browser. A QR code appears.
@@ -179,7 +182,8 @@ Good to know:
 
 Registering a SoundCloud app needs an **Artist Pro** subscription.
 
-1. At https://soundcloud.com/you/apps, set the app's redirect URI to `http://127.0.0.1:8974/callback`.
+1. At https://soundcloud.com/you/apps, set the app's redirect URI to `http://127.0.0.1:8974/callback`. (Your own
+   app works on the computer only.)
 2. In Settings → Integrations → SoundCloud → **Use your own SoundCloud app**, paste its Client ID and Client
    Secret and click **Save keys**.
 3. Click **Connect**.
