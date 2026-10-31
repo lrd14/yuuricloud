@@ -24,7 +24,7 @@ const COVER_NAMES: &[&str] = &["cover", "folder", "front", "album", "albumart", 
 pub const UNKNOWN_ARTIST: &str = "Unknown Artist";
 pub const UNKNOWN_ALBUM: &str = "Unknown Album";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Track {
     pub path: String,
@@ -68,6 +68,8 @@ pub struct Settings {
     pub soundcloud: crate::soundcloud::ScConfig,
     /// Paths of songs marked as favourites.
     pub favorites: Vec<String>,
+    /// Favourites from an imported backup whose songs aren't in the library yet.
+    pub pending_favorites: Vec<crate::backup::SongRef>,
     pub downloads: crate::downloads::DownloadConfig,
     pub soulseek: crate::slsk::SlskConfig,
 }
@@ -84,6 +86,7 @@ impl Default for Settings {
             discord: Default::default(),
             soundcloud: Default::default(),
             favorites: Vec::new(),
+            pending_favorites: Vec::new(),
             downloads: Default::default(),
             soulseek: Default::default(),
         }

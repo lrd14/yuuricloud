@@ -1,6 +1,7 @@
 //! The app itself. `main.rs` starts it on desktop; on iOS, Xcode links this library and calls
 //! `run` through the mobile entry point.
 
+mod backup;
 mod cover_color;
 mod downloads;
 mod editor;
@@ -1041,6 +1042,76 @@ async fn slsk_pick_exe(app: AppHandle) -> Result<Option<String>, String> {
     Ok(Some(picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned()))
 }
 
+// ---------------------------------------------------------------- backups
+
+/// Save settings and favourites (and logins, if asked) to a file. On a computer the user picks
+/// where; on iOS it goes in the app's folder, where the Files app can reach it. Returns the file,
+/// or None when the user cancelled.
+#[tauri::command]
+async fn export_backup(app: AppHandle, include_logins: bool) -> Result<Option<String>, String> {
+    let text = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap();
+        let tracks = state.tracks.lock().unwrap();
+        serde_json::to_string_pretty(&backup::make(&settings, &tracks, include_logins)).map_err(|e| e.to_string())?
+    };
+    let name = format!("yuuricloud backup {}.json", backup::today());
+    #[cfg(desktop)]
+    let path = {
+        let picked = app.dialog().file().set_title("Save a backup").set_file_name(&name).add_filter("yuuricloud backup", &["json"]).blocking_save_file();
+        let Some(picked) = picked else { return Ok(None) };
+        picked.into_path().map_err(|e| e.to_string())?
+    };
+    #[cfg(mobile)]
+    let path = phone_music_folder(&app).join(&name);
+    std::fs::write(&path, text).map_err(|e| format!("Couldn't save the backup: {e}"))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[derive(Serialize)]
+struct ImportResult {
+    settings: Settings,
+    imported: backup::Imported,
+    file: String,
+}
+
+/// Restore a backup. On a computer the user picks the file; on iOS it's the newest backup in the
+/// app's folder. Returns None when the user cancelled.
+#[tauri::command]
+async fn import_backup(app: AppHandle) -> Result<Option<ImportResult>, String> {
+    #[cfg(desktop)]
+    let path = {
+        let picked = app.dialog().file().set_title("Choose a backup").add_filter("yuuricloud backup", &["json"]).blocking_pick_file();
+        let Some(picked) = picked else { return Ok(None) };
+        picked.into_path().map_err(|e| e.to_string())?
+    };
+    #[cfg(mobile)]
+    let path = newest_backup(&phone_music_folder(&app)).ok_or("No backup found. Put a yuuricloud backup file in yuuricloud's folder in the Files app first")?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("Couldn't read the backup: {e}"))?;
+    let parsed = backup::parse(&text)?;
+    let state = app.state::<AppState>();
+    let tracks = state.tracks.lock().unwrap().clone();
+    let mut s = state.settings.lock().unwrap();
+    let imported = backup::apply(parsed, &mut s, &tracks);
+    state.save_settings(&s);
+    let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Ok(Some(ImportResult { settings: s.clone(), imported, file }))
+}
+
+/// iOS: the most recently changed "yuuricloud backup ….json" in the app's folder.
+#[cfg(mobile)]
+fn newest_backup(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            name.starts_with("yuuricloud backup") && name.ends_with(".json")
+        })
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+        .map(|e| e.path())
+}
+
 // ---------------------------------------------------------------- updates
 
 const RELEASES_API: &str = "https://api.github.com/repos/lrd14/yuuricloud/releases/latest";
@@ -1213,6 +1284,10 @@ async fn scan(app: AppHandle, state: State<'_, AppState>, full: bool) -> Result<
     {
         let mut s = state.settings.lock().unwrap();
         s.scanned_with_tags = Some(prefer_tags);
+        // favourites from a backup whose songs have turned up
+        if backup::match_pending(&mut s, &tracks) {
+            let _ = app.emit("favorites-changed", s.favorites.clone());
+        }
         state.save_settings(&s);
     }
     *state.tracks.lock().unwrap() = tracks.clone();
@@ -1313,6 +1388,8 @@ pub fn run() {
             pick_cover_image,
             save_song_tags,
             check_update,
+            export_backup,
+            import_backup,
             tool_install,
             tool_cancel,
             slsk_set_config,

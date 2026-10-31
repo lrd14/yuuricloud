@@ -438,6 +438,26 @@
               <div><div class="label">Setup guide</div><div class="hint">Walk through adding your music and connecting SoundCloud, Soulseek, Last.fm and Discord again.</div></div>
               <button id="run-setup" class="btn">Run setup</button>
             </div>
+            <div class="row backup-row">
+              <div>
+                <div class="label">Back up settings and favourites</div>
+                <div class="hint">
+                  Save them to a file to restore later, or to move them to another device. Favourites are matched by
+                  title and artist there, so they carry over even when the music is in other folders; songs that
+                  aren't there yet become favourites once they are.
+                </div>
+                <div class="hint ios-only">Export saves the file in yuuricloud's folder in the Files app. To import, put a backup file there and tap Import.</div>
+                <label class="editor-check backup-logins">
+                  <input id="backup-logins" type="checkbox" />
+                  <span>Include logins and keys (Last.fm, Soulseek, Discord). Keep that file private. SoundCloud you sign in to on each device.</span>
+                </label>
+                <div id="backup-status" class="hint"></div>
+              </div>
+              <div class="actions">
+                <button id="backup-export" class="btn">Export…</button>
+                <button id="backup-import" class="btn">Import…</button>
+              </div>
+            </div>
             <div class="row">
               <div><div class="label">Reset all settings</div><div class="hint">Puts every option on this page back to its default. Your library is kept.</div></div>
               <button id="reset-prefs" class="btn danger">Reset</button>

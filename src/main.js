@@ -1522,6 +1522,46 @@ el.settings.addEventListener("click", (e) => {
   const swatch = e.target.closest(".swatch[data-color]");
   if (swatch) setPref("accent", swatch.dataset.color);
 });
+// Backups: settings and favourites to a file and back (see backup.rs)
+function backupStatus(text, ok = true) {
+  $("backup-status").className = "hint" + (text ? (ok ? " ok" : " err") : "");
+  $("backup-status").textContent = text;
+}
+$("backup-export").addEventListener("click", async () => {
+  try {
+    const file = await invoke("export_backup", { includeLogins: $("backup-logins").checked });
+    if (file) backupStatus(`Saved to ${ios ? `yuuricloud's folder as “${baseName(file)}”` : file}`);
+  } catch (e) {
+    backupStatus(String(e), false);
+  }
+});
+$("backup-import").addEventListener("click", async () => {
+  let r;
+  try {
+    r = await invoke("import_backup");
+  } catch (e) {
+    return backupStatus(String(e), false);
+  }
+  if (!r) return;
+  state.settings = r.settings;
+  state.favorites = new Set(r.settings.favorites || []);
+  const linuxDefaults = platform === "linux" ? { blur: false, tint: 0.96 } : {};
+  prefs = { ...DEFAULT_PREFS, ...linuxDefaults, ...(r.settings.ui || {}) };
+  applyPrefs();
+  applySearch();
+  renderNowFav();
+  fillIntegrationFields();
+  const i = r.imported;
+  const parts = [i.prefs && "settings", `${i.favorites} favourite${i.favorites === 1 ? "" : "s"}`, i.logins && "logins"].filter(Boolean);
+  backupStatus(`Imported ${parts.join(", ")} from “${r.file}”` + (i.waiting ? `. ${i.waiting} more become favourites once those songs are in your library.` : "."));
+});
+listen("favorites-changed", ({ payload }) => {
+  state.favorites = new Set(payload);
+  state.settings.favorites = payload;
+  if (state.source === "local") applySearch();
+  renderNowFav();
+});
+
 $("reset-prefs").addEventListener("click", () => {
   const linuxDefaults = platform === "linux" ? { blur: false, tint: 0.96 } : {};
   prefs = { ...DEFAULT_PREFS, ...linuxDefaults };

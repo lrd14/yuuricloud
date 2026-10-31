@@ -308,6 +308,13 @@ app.
 
 <p align="center"><img src="docs/settings.png" alt="The Settings window on the Appearance tab" width="820"></p>
 
+**Back up, or move to another device:** Settings → Playback → **Back up settings and favourites**. **Export…**
+saves your settings and favourites to a file; **Import…** on another computer or iPhone puts them back. Favourites
+are matched by title and artist, so they carry over even when the music is in different folders, and songs that
+aren't on the new device yet become favourites once you add them. Tick **Include logins and keys** to bring your
+Last.fm, Soulseek and Discord logins along (keep that file private). On an iPhone, the backup is saved in, and
+imported from, yuuricloud's folder in the Files app.
+
 ## Troubleshooting
 
 - **Windows says "Windows protected your PC".** Click **More info → Run anyway**. The app isn't signed with a paid
