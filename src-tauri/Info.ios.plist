@@ -13,6 +13,19 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<!-- yuuricloud:// links open the app: the computer's QR code and the SoundCloud sign-in. The
+	     deep-link plugin adds this from its build script too, but a cached build skips that. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>cloud.yuuri.player.yuuricloud</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>yuuricloud</string>
+			</array>
+		</dict>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>
