@@ -1,6 +1,6 @@
 [package]
 name = "yuuricloud"
-version = "0.5.1"
+version = "0.5.2"
 description = "A small local music player"
 edition = "2021"
 
