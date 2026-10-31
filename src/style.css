@@ -763,6 +763,10 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
   body.ios th.num, body.ios td.num { width: 34px; }
   body.ios th.time, body.ios td.time { width: 54px; padding-right: 10px; }
   body.ios .col-album, body.ios table.one-artist #th-artist, body.ios table.one-artist td:nth-child(3) { display: none; }
+  /* Soulseek results: quality says more than size on a small screen */
+  /* (size is squeezed to nothing rather than hidden: the folder rows span every column) */
+  body.ios.slsk .col-album { display: table-cell; width: 40%; }
+  body.ios.slsk #th-artist, body.ios.slsk tbody tr:not(.slsk-group) td:nth-child(3) { width: 0; padding: 0; font-size: 0; }
 
   /* player: song on top, buttons and seek bar below */
   body.ios .player { grid-template-columns: minmax(0, 1fr); height: auto; gap: 6px; padding: 10px 12px 8px; }

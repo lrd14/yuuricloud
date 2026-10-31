@@ -42,6 +42,8 @@ and iPad.
 - **iPhone and iPad** app with your music, SoundCloud and Soulseek, made for one hand on a phone and three panels
   on an iPad or an unfolded iPhone Duo.
 
+<p align="center"><img src="docs/iphone.png" alt="The iPhone app: albums, an album's songs with the player, and Soulseek search results" width="760"></p>
+
 ## Install
 
 Download the file for your system from the **[latest release](https://github.com/lrd14/yuuricloud/releases/latest)**.
@@ -113,6 +115,8 @@ connecting SoundCloud, Soulseek, Last.fm and Discord. Every step can be skipped 
 2. yuuricloud scans it and shows your **artists**, their **albums** and the **songs**. Click an artist, then an
    album; **double-click** a song, album or artist to play it.
 
+<p align="center"><img src="docs/library.png" alt="The library: artists on the left, album covers above, songs below, and the player with a waveform seek bar" width="820"></p>
+
 **How artists and albums are found.** The folder layout comes first; file tags fill in the rest (title, track
 number, year, length):
 
@@ -150,6 +154,8 @@ New songs show up when you switch back to yuuricloud.
 access, and the app picks it up by itself. Then switch the title bar to **SoundCloud** to see your likes, your own
 and liked playlists. Type in the search box to filter what's on screen, or press **Enter** to search all of
 SoundCloud.
+
+<p align="center"><img src="docs/soundcloud.png" alt="SoundCloud likes shown as cover cards, with playlists on the left" width="820"></p>
 
 **On an iPhone:** the phone signs in through yuuricloud on your computer:
 
@@ -215,6 +221,8 @@ password in Settings → Integrations → Soulseek and tap **Connect**.
 **Searching:** switch the title bar to **Soulseek**, type what you want and press **Enter**. Results are grouped
 by user and folder, with each file's quality; users with a free slot and a fast connection come first.
 **Double-click** a song (tap it on a phone) to download it, or right-click (hold) for **Download whole folder**.
+
+<p align="center"><img src="docs/soulseek.png" alt="Soulseek search results grouped by user and folder, with file size and quality" width="820"></p>
 
 Downloads show on the **Downloads** page and land in `Music/Soulseek` (on the iPhone, a `Soulseek` folder inside
 yuuricloud's folder), and show up in your library as they finish. A download can wait in the other user's queue
@@ -287,6 +295,8 @@ back arrow goes up a level. Hold a song for its menu.
 darkness, cover and interface size, a compact song list, animations, the waveform seek bar, single-click play,
 fades, and **Resume where you left off**, which reopens the same song, queue and view you had when you closed the
 app.
+
+<p align="center"><img src="docs/settings.png" alt="The Settings window on the Appearance tab" width="820"></p>
 
 ## Troubleshooting
 
