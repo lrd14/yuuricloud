@@ -1713,8 +1713,7 @@ function renderScSettings() {
   const status = $("sc-status");
   status.className = "hint" + (connected ? " ok" : "");
   status.textContent = connected ? `Connected as ${sc.username}${ownKeys ? " (your own app)" : ""}`
-    : scWaiting ? "Approve access in the browser window that opened…"
-    : ios ? "Not connected — sign in from your computer below"
+    : scWaiting ? (ios ? "Approve access in Safari, then come back here…" : "Approve access in the browser window that opened…")
     : ownKeys ? "Not connected — using your own app" : scBuiltin ? "Not connected" : "Add your Client ID and Client Secret below first.";
   if (!scBuiltin && !ownKeys && !ios) $("sc-own").open = true;
   $("sc-connect").hidden = connected || scWaiting;

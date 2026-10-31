@@ -5,6 +5,11 @@
 // and this Worker adds the secret before passing them on (/token). Everything else goes straight
 // from the app to SoundCloud with each user's own login.
 //
+// The app's redirect URI is this Worker's /callback. SoundCloud sends the browser there after the
+// user approves, and it goes on to where the sign-in started: the computer app listening on
+// 127.0.0.1, or, for a sign-in a phone started (its state begins with "ios."), the phone app
+// through a yuuricloud:// link.
+//
 // Last.fm signs every call that acts for a user (signing in, now playing, scrobbles) with the API
 // account's shared secret, so those calls come here (/lastfm), get the key and signature added,
 // and go on to Last.fm. Only those methods are let through.
@@ -12,11 +17,15 @@
 // Settings (see README.md):
 //   SC_CLIENT_ID      the app's Client ID (public)
 //   SC_CLIENT_SECRET  the app's Client Secret — set with `wrangler secret put`, never in a file
-//   ALLOWED_REDIRECT  the redirect URI registered for the app
+//   ALLOWED_REDIRECT  the redirect URI registered for the app: this Worker's /callback
 //   LASTFM_API_KEY    the Last.fm API key (public)
 //   LASTFM_SECRET     the Last.fm shared secret — set with `wrangler secret put`, never in a file
 
 const TOKEN_URL = "https://secure.soundcloud.com/oauth/token";
+// where the computer app listens for the sign-in to come back
+const DESKTOP_CALLBACK = "http://127.0.0.1:8974/callback";
+// opens the phone app with the sign-in
+const PHONE_CALLBACK = "yuuricloud://soundcloud-auth";
 const LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
 // What the app signs with the shared account: signing in, and scrobbling for a signed-in user
 const LASTFM_METHODS = ["auth.getToken", "auth.getSession", "track.updateNowPlaying", "track.scrobble"];
@@ -31,6 +40,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/lastfm") return lastfm(request, env);
+    if (url.pathname === "/callback") return callback(url);
     if (url.pathname !== "/token") return json(404, { error: "not_found" });
     if (request.method !== "POST") return json(405, { error: "method_not_allowed" });
     if (!env.SC_CLIENT_ID || !env.SC_CLIENT_SECRET) {
@@ -72,6 +82,27 @@ export default {
     });
   },
 };
+
+/** SoundCloud sending the browser back after approval: pass the answer on to the app that asked. */
+function callback(url) {
+  const answer = new URLSearchParams();
+  for (const key of ["code", "state", "error", "error_description"]) {
+    const value = url.searchParams.get(key);
+    if (value !== null) answer.set(key, value.slice(0, 2048));
+  }
+  if (!(answer.get("state") || "").startsWith("ios.")) {
+    return new Response(null, { status: 302, headers: { Location: `${DESKTOP_CALLBACK}?${answer}`, "Cache-Control": "no-store" } });
+  }
+  // Safari asks before opening an app, so the page offers a button too
+  const target = `${PHONE_CALLBACK}?${answer}`.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  const page = `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>yuuricloud</title><meta http-equiv=refresh content="0;url=${target}">
+<body style="font:17px system-ui;background:#15161b;color:#eee;display:grid;place-items:center;height:90vh;margin:0">
+<div style="text-align:center;padding:24px"><h2>Back to yuuricloud</h2>
+<p><a href="${target}" style="display:inline-block;padding:12px 22px;border-radius:10px;background:#8b7cff;color:#fff;text-decoration:none;font-weight:600">Open yuuricloud</a></p>
+<p style="color:#aaa">If it doesn't open by itself, tap the button.</p></div>`;
+  return new Response(page, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+}
 
 /** Sign a Last.fm call with the shared secret and pass it on. Replies come back unchanged. */
 async function lastfm(request, env) {

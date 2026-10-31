@@ -3,9 +3,11 @@
 //! By default the app signs in through yuuricloud's shared SoundCloud app: its Client ID is built
 //! in, and the two requests that need its Client Secret (sign-in and token refresh) go through a
 //! small proxy that holds the secret (see `soundcloud-proxy/`). Users can instead paste the keys of
-//! their own SoundCloud app (registering one needs Artist Pro). Signing in uses OAuth 2.1 with PKCE: the browser opens SoundCloud's approval page and
-//! redirects back to a tiny one-shot HTTP listener on the redirect URI (by default
-//! `DEFAULT_REDIRECT_URI`; the user can change it to match their app registration).
+//! their own SoundCloud app (registering one needs Artist Pro). Signing in uses OAuth 2.1 with PKCE:
+//! the browser opens SoundCloud's approval page and comes back to a tiny one-shot HTTP listener on
+//! `DEFAULT_REDIRECT_URI` (or the user's own app's redirect URI). The shared app's redirect URI is
+//! the proxy's `/callback`, which sends the browser on to that listener, or, for a sign-in a phone
+//! started, opens the phone app with a `yuuricloud://soundcloud-auth` link.
 //!
 //! Tracks are played from a local file: the stream (a single MP3, or an HLS playlist whose
 //! segments are joined together) is downloaded into a small cache that only keeps the last few
@@ -24,6 +26,8 @@ use sha2::{Digest, Sha256};
 use crate::integrations::unix_now;
 
 pub const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:8974/callback";
+/// Sign-ins whose state starts with this go back to the phone app (see the proxy's `/callback`).
+const PHONE_STATE_PREFIX: &str = "ios.";
 /// The shared app's Client ID. Public: it is part of every sign-in link anyway.
 pub const BUILTIN_CLIENT_ID: &str = "ChGXzMzf6bueI7rU1XUuM0tr5c89v0Nl";
 /// Where the deployed `soundcloud-proxy` Worker lives, e.g. "https://yuuricloud-soundcloud.NAME.workers.dev".
@@ -61,8 +65,18 @@ impl ScConfig {
     fn app_client_id(&self) -> &str {
         if self.own_app() { &self.client_id } else { BUILTIN_CLIENT_ID }
     }
-    pub fn redirect_uri(&self) -> &str {
-        // the shared app only has the default registered
+    /// Where SoundCloud sends the browser after approval: the user's own app's redirect URI, or the
+    /// shared app's, which is the proxy's `/callback`.
+    pub fn redirect_uri(&self) -> String {
+        if !self.own_app() {
+            format!("{}/callback", BUILTIN_TOKEN_PROXY.trim_end_matches('/'))
+        } else {
+            self.listen_uri().to_string()
+        }
+    }
+
+    /// Where this computer listens for the browser coming back.
+    fn listen_uri(&self) -> &str {
         if !self.own_app() || self.redirect_uri.is_empty() { DEFAULT_REDIRECT_URI } else { &self.redirect_uri }
     }
 
@@ -168,14 +182,71 @@ fn url_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Open SoundCloud's approval page and wait (up to 5 minutes, or until `cancel` is set) for the
-/// browser to come back with a code. Returns the config with fresh tokens and the username.
-pub fn connect(cfg: &ScConfig, open_url: impl Fn(&str) -> Result<(), String>, cancel: &AtomicBool) -> Result<ScConfig, String> {
+/// A sign-in waiting for the user to approve it in the browser.
+pub struct SignIn {
+    /// SoundCloud's approval page
+    pub url: String,
+    verifier: String,
+    state: String,
+    redirect_uri: String,
+}
+
+/// Start signing in. `phone` sign-ins come back to the phone app instead of this computer.
+pub fn begin_sign_in(cfg: &ScConfig, phone: bool) -> Result<SignIn, String> {
     if !cfg.own_app() && !builtin_available() {
         return Err("Add your SoundCloud Client ID and Client Secret first".into());
     }
-    let redirect_uri = cfg.redirect_uri().to_string();
-    let (host, port, path) = parse_redirect(&redirect_uri)?;
+    let redirect_uri = cfg.redirect_uri();
+    let verifier = random_string()?;
+    let challenge = base64url(&Sha256::digest(verifier.as_bytes()));
+    let state = format!("{}{}", if phone { PHONE_STATE_PREFIX } else { "" }, random_string()?);
+    let url = format!(
+        "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&code_challenge={challenge}&code_challenge_method=S256&state={}",
+        url_encode(cfg.app_client_id()),
+        url_encode(&redirect_uri),
+        url_encode(&state),
+    );
+    Ok(SignIn { url, verifier, state, redirect_uri })
+}
+
+impl SignIn {
+    #[cfg_attr(desktop, allow(dead_code))]
+    pub fn state(&self) -> &str {
+        &self.state
+    }
+
+    /// Trade the code the browser came back with for tokens. Returns the config with them and the
+    /// username.
+    pub fn finish(&self, cfg: &ScConfig, code: &str) -> Result<ScConfig, String> {
+        let mut cfg = cfg.clone();
+        let token = token_request(&cfg, &[
+            ("grant_type", "authorization_code"),
+            ("redirect_uri", &self.redirect_uri),
+            ("code_verifier", &self.verifier),
+            ("code", code),
+        ])?;
+        apply_token(&mut cfg, &token);
+        let me = get(&mut cfg, "/me")?;
+        cfg.username = me["username"].as_str().unwrap_or("").to_string();
+        Ok(cfg)
+    }
+}
+
+/// The browser coming back from SoundCloud with `code`, `state` and maybe `error`: the code, if the
+/// state is the one `sign_in` sent.
+pub fn code_from_reply(sign_in: &SignIn, param: impl Fn(&str) -> Option<String>) -> Result<String, String> {
+    match (param("code"), param("state"), param("error")) {
+        (Some(code), Some(s), _) if s == sign_in.state => Ok(code),
+        (_, _, Some(err)) => Err(format!("SoundCloud said: {err}")),
+        _ => Err("SoundCloud sent an unexpected reply".to_string()),
+    }
+}
+
+/// Open SoundCloud's approval page and wait (up to 5 minutes, or until `cancel` is set) for the
+/// browser to come back with a code. Returns the config with fresh tokens and the username.
+pub fn connect(cfg: &ScConfig, open_url: impl Fn(&str) -> Result<(), String>, cancel: &AtomicBool) -> Result<ScConfig, String> {
+    let sign_in = begin_sign_in(cfg, false)?;
+    let (host, port, path) = parse_redirect(cfg.listen_uri())?;
     // "localhost" may resolve to either loopback address, so listen on both.
     let mut listeners = vec![TcpListener::bind(("127.0.0.1", port))
         .map_err(|e| format!("Couldn't listen on port {port} for the sign-in: {e}"))?];
@@ -185,16 +256,7 @@ pub fn connect(cfg: &ScConfig, open_url: impl Fn(&str) -> Result<(), String>, ca
     for l in &listeners {
         l.set_nonblocking(true).map_err(|e| e.to_string())?;
     }
-
-    let verifier = random_string()?;
-    let challenge = base64url(&Sha256::digest(verifier.as_bytes()));
-    let state = random_string()?;
-    let url = format!(
-        "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&code_challenge={challenge}&code_challenge_method=S256&state={state}",
-        url_encode(cfg.app_client_id()),
-        url_encode(&redirect_uri),
-    );
-    open_url(&url)?;
+    open_url(&sign_in.url)?;
 
     let deadline = Instant::now() + Duration::from_secs(300);
     let code = loop {
@@ -229,10 +291,11 @@ pub fn connect(cfg: &ScConfig, open_url: impl Fn(&str) -> Result<(), String>, ca
         let param = |name: &str| {
             query.split('&').find_map(|kv| kv.strip_prefix(name).and_then(|v| v.strip_prefix('=')).map(url_decode))
         };
-        let (title, result) = match (param("code"), param("state"), param("error")) {
-            (Some(code), Some(s), _) if s == state => ("Connected to yuuricloud", Ok(code)),
-            (_, _, Some(err)) => ("Sign-in was cancelled", Err(format!("SoundCloud said: {err}"))),
-            _ => ("Something went wrong", Err("SoundCloud sent an unexpected reply".to_string())),
+        let result = code_from_reply(&sign_in, param);
+        let title = match (&result, param("error")) {
+            (Ok(_), _) => "Connected to yuuricloud",
+            (Err(_), Some(_)) => "Sign-in was cancelled",
+            (Err(_), None) => "Something went wrong",
         };
         let page = format!(
             "<!doctype html><meta charset=utf-8><title>yuuricloud</title>\
@@ -245,18 +308,7 @@ pub fn connect(cfg: &ScConfig, open_url: impl Fn(&str) -> Result<(), String>, ca
         );
         break result?;
     };
-
-    let mut cfg = cfg.clone();
-    let token = token_request(&cfg, &[
-        ("grant_type", "authorization_code"),
-        ("redirect_uri", &redirect_uri),
-        ("code_verifier", &verifier),
-        ("code", &code),
-    ])?;
-    apply_token(&mut cfg, &token);
-    let me = get(&mut cfg, "/me")?;
-    cfg.username = me["username"].as_str().unwrap_or("").to_string();
-    Ok(cfg)
+    sign_in.finish(cfg, &code)
 }
 
 // ------------------------------------------------------- signing in a phone

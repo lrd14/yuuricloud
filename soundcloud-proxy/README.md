@@ -9,7 +9,12 @@ sends just those two requests here instead. The Worker adds the secret and forwa
 Everything else (likes, playlists, search, streaming) goes straight from the app to SoundCloud with each
 person's own login.
 
-The Worker only accepts those two kinds of request. It only accepts the redirect URI in `wrangler.toml`, and
+The app's **redirect URI** is the Worker's `/callback`. After someone approves the sign-in, SoundCloud sends the
+browser there, and the Worker passes it on: to `http://127.0.0.1:8974/callback`, where the computer app listens, or,
+for a sign-in started on an iPhone, to the phone app through a `yuuricloud://soundcloud-auth` link. So set the
+SoundCloud app's redirect URI to `https://<your worker>/callback`, the same as `ALLOWED_REDIRECT`.
+
+The Worker only accepts those two kinds of token request. It only accepts the redirect URI in `wrangler.toml`, and
 it never includes the secret in a reply. The worst someone can do by calling it directly is sign in to their
 own SoundCloud account through your app.
 

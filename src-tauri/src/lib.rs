@@ -37,6 +37,10 @@ struct AppState {
     cover_colors: Mutex<HashMap<String, Option<String>>>,
     /// set to stop waiting for the SoundCloud sign-in
     sc_cancel: AtomicBool,
+    /// Phones: the sign-in waiting for SoundCloud to send the browser back (its state, and where
+    /// to hand the reply), see `sc_connect` and `open_links`.
+    #[cfg(mobile)]
+    sc_phone_sign_in: Mutex<Option<(String, std::sync::mpsc::Sender<Result<String, String>>)>>,
     /// held while refreshing the SoundCloud token, so two calls don't refresh at once
     sc_auth: Mutex<()>,
     /// set to stop the SoundCloud download in progress
@@ -403,13 +407,46 @@ async fn sc_connect(app: AppHandle) -> Result<Settings, String> {
         state.sc_cancel.store(false, Ordering::Relaxed);
         let cfg = state.settings.lock().unwrap().soundcloud.clone();
         let open = |url: &str| app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string());
+        #[cfg(desktop)]
         let cfg = soundcloud::connect(&cfg, open, &state.sc_cancel)?;
+        #[cfg(mobile)]
+        let cfg = phone_sign_in(&state, &cfg, open)?;
         let mut s = state.settings.lock().unwrap();
         s.soundcloud = cfg;
         state.save_settings(&s);
         Ok(s.clone())
     })
     .await
+}
+
+/// Phones: sign in through Safari. A phone app can't listen for the browser coming back the way
+/// the computer does, so the proxy sends it back as a `yuuricloud://soundcloud-auth` link, which
+/// `open_links` hands to the waiting sign-in here.
+#[cfg(mobile)]
+fn phone_sign_in(state: &AppState, cfg: &soundcloud::ScConfig, open: impl Fn(&str) -> Result<(), String>) -> Result<soundcloud::ScConfig, String> {
+    if cfg.own_app() {
+        return Err("Your own SoundCloud app can't sign in on a phone. Clear its keys, or link from your computer".into());
+    }
+    let sign_in = soundcloud::begin_sign_in(cfg, true)?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    *state.sc_phone_sign_in.lock().unwrap() = Some((sign_in.state().to_string(), tx));
+    let waited = (|| {
+        open(&sign_in.url)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        loop {
+            if state.sc_cancel.load(Ordering::Relaxed) {
+                return Err("Cancelled".to_string());
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("Timed out waiting for SoundCloud — try Connect again".to_string());
+            }
+            if let Ok(reply) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                return reply;
+            }
+        }
+    })();
+    state.sc_phone_sign_in.lock().unwrap().take();
+    sign_in.finish(cfg, &waited?)
 }
 
 /// Whether the shared SoundCloud app is set up, so users can connect without their own keys.
@@ -487,6 +524,21 @@ fn open_links(app: &tauri::App) {
     use tauri_plugin_deep_link::DeepLinkExt;
     fn apply(app: &AppHandle, urls: Vec<tauri::Url>) {
         for url in urls.iter().filter(|u| u.scheme() == "yuuricloud") {
+            // SoundCloud's approval coming back for the sign-in `phone_sign_in` is waiting on
+            if url.host_str() == Some("soundcloud-auth") {
+                let state = app.state::<AppState>();
+                let pending = state.sc_phone_sign_in.lock().unwrap();
+                let param = |name: &str| url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
+                if let Some((_, tx)) = pending.as_ref().filter(|(expected, _)| param("state").as_deref() == Some(expected.as_str())) {
+                    let reply = match (param("code"), param("error")) {
+                        (Some(code), _) => Ok(code),
+                        (None, Some(err)) => Err(format!("SoundCloud said: {err}")),
+                        (None, None) => Err("SoundCloud sent an unexpected reply".to_string()),
+                    };
+                    let _ = tx.send(reply);
+                }
+                continue;
+            }
             match link_soundcloud(&app.state::<AppState>(), url.as_str()) {
                 Ok(settings) => drop(app.emit("sc-linked", settings)),
                 Err(e) => drop(app.emit("sc-link-failed", e)),
@@ -1201,6 +1253,8 @@ pub fn run() {
                 art_cache: Mutex::new(HashMap::new()),
                 cover_colors: Mutex::new(HashMap::new()),
                 sc_cancel: AtomicBool::new(false),
+                #[cfg(mobile)]
+                sc_phone_sign_in: Mutex::new(None),
                 sc_auth: Mutex::new(()),
                 dl_cancel: AtomicBool::new(false),
                 tool_cancel: AtomicBool::new(false),

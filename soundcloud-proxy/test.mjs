@@ -75,4 +75,17 @@ for (const method of ["user.getInfo", "auth.getMobileSession", "", null]) {
 r = await post({ method: "track.scrobble" }, "/lastfm");
 assert.ok(!(await r.text()).includes("lfmsecret"));
 
+// SoundCloud coming back: on to the computer app, or the phone app for an "ios." sign-in
+r = await worker.fetch(new Request("https://proxy.example/callback?code=c1&state=abc"), env);
+assert.equal(r.status, 302);
+assert.equal(r.headers.get("Location"), "http://127.0.0.1:8974/callback?code=c1&state=abc");
+r = await worker.fetch(new Request("https://proxy.example/callback?error=access_denied&state=abc&evil=1"), env);
+assert.equal(r.headers.get("Location"), "http://127.0.0.1:8974/callback?state=abc&error=access_denied");
+r = await worker.fetch(new Request("https://proxy.example/callback?code=c2&state=ios.xyz"), env);
+assert.equal(r.status, 200);
+const page = await r.text();
+assert.ok(page.includes('href="yuuricloud://soundcloud-auth?code=c2&amp;state=ios.xyz"'));
+r = await worker.fetch(new Request('https://proxy.example/callback?code=%22%3E%3Cscript%3E&state=ios.x'), env);
+assert.ok(!(await r.text()).includes("<script>"));
+
 console.log("worker ok");
