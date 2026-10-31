@@ -220,10 +220,13 @@
         <button id="locate" class="icon-btn locate" title="Show the playing song and album (Ctrl+L)" hidden>
           <svg viewBox="0 0 24 24"><use href="#i-locate" /></svg>
         </button>
+        <button id="now-fav" class="icon-btn locate now-fav" title="Add to favourites" hidden>
+          <svg viewBox="0 0 24 24"><use id="now-fav-icon" href="#i-heart-outline" /></svg>
+        </button>
       </div>
       <div class="controls">
         <div class="buttons">
-          <button id="shuffle" class="icon-btn toggle" title="Shuffle"><svg viewBox="0 0 24 24"><use href="#i-shuffle" /></svg></button>
+          <button id="shuffle" class="icon-btn toggle" title="Shuffle: off"><svg viewBox="0 0 24 24"><use id="shuffle-icon" href="#i-shuffle" /></svg></button>
           <button id="prev" class="icon-btn" title="Previous (Ctrl ←)"><svg viewBox="0 0 24 24"><use href="#i-prev" /></svg></button>
           <button id="play" class="play-btn" title="Play / Pause (Space)"><svg viewBox="0 0 24 24"><use id="play-icon" href="#i-play" /></svg></button>
           <button id="next" class="icon-btn" title="Next (Ctrl →)"><svg viewBox="0 0 24 24"><use href="#i-next" /></svg></button>
@@ -239,11 +242,28 @@
         </div>
       </div>
       <div class="volume">
+        <button id="queue-btn" class="icon-btn toggle" title="Queue"><svg viewBox="0 0 24 24"><use href="#i-queue" /></svg></button>
         <button id="mute" class="icon-btn" title="Mute"><svg viewBox="0 0 24 24"><use id="vol-icon" href="#i-volume" /></svg></button>
         <input id="volume" class="range" type="range" min="0" max="1" step="0.01" value="0.7" />
       </div>
     </footer>
     <div id="status" class="status"></div>
+
+    <aside id="queue" class="queue-panel" hidden>
+      <header class="queue-head">
+        <div>
+          <h2>Queue</h2>
+          <div id="queue-summary" class="hint"></div>
+        </div>
+        <div class="actions">
+          <button id="queue-clear" class="btn small" title="Remove the songs coming up">Clear</button>
+          <button id="queue-close" class="icon-btn" title="Close">
+            <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+          </button>
+        </div>
+      </header>
+      <div id="queue-list" class="queue-list"></div>
+    </aside>
 
     <div id="settings" class="settings-backdrop" hidden>
       <section class="settings" role="dialog" aria-labelledby="settings-title">
@@ -839,6 +859,7 @@
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M5 20h14v-2H5zM19 9h-4V3H9v6H5l7 7z" /></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></symbol>
     <symbol id="i-to-top" viewBox="0 0 24 24"><path d="M5 4h14v2H5zm7 4-6 6h4v6h4v-6h4z" /></symbol>
+    <symbol id="i-random" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2.5 3a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm9 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM12 10.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM7.5 15a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm9 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" /></symbol>
     <symbol id="i-back" viewBox="0 0 24 24"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" /></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" /></symbol>
   </svg>

@@ -289,6 +289,12 @@ The status shows the album cover from Last.fm when Last.fm knows the album. Comp
 | F5 | Rescan the library |
 | Ctrl + , | Settings |
 
+**The player:** the shuffle button switches between **off**, **shuffle** (every song once, in a random order) and
+**random** (the dice: each next song is picked afresh, so songs can come up again). The ♥ next to the playing song
+adds it to your favourites, or likes it on SoundCloud. The queue button (bottom right, next to the song on a
+phone) shows what's playing, what played before and what's up next: click a song to jump to it, or ✕ to take it
+out.
+
 Right-click a song for **Play next**, **favourites** (♥ Favourites appears at the top of the artist list), **Edit
 song info…** and more. Click the song name in the player to jump to it in the library.
 

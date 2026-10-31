@@ -5,6 +5,11 @@ const { listen } = window.__TAURI__.event;
 
 const UNKNOWN_ARTIST = "Unknown Artist";
 const REPEAT_OFF = 0, REPEAT_ALL = 1, REPEAT_ONE = 2;
+// Shuffle plays every song once in a random order; random picks each next song afresh, so songs can
+// come up again before the rest have played.
+const SHUFFLE_OFF = 0, SHUFFLE_ON = 1, SHUFFLE_RANDOM = 2;
+/** Saved shuffle settings from before random mode were true/false. */
+const shuffleMode = (v) => (v === true ? SHUFFLE_ON : [SHUFFLE_ON, SHUFFLE_RANDOM].includes(v) ? v : SHUFFLE_OFF);
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -32,7 +37,7 @@ const state = {
   albumKeys: [],  // album keys in grid order
   selected: -1,   // selected row in the song table
   queue: [], order: [], pos: -1,
-  shuffle: false, repeat: REPEAT_OFF,
+  shuffle: SHUFFLE_OFF, repeat: REPEAT_OFF,
   scanning: false, rescanQueued: false,
   source: "local", // "local" library or "sc" (SoundCloud)
   // Soulseek through slskd: connection status, recent searches and slskd's download list
@@ -62,7 +67,7 @@ const DEFAULT_PREFS = {
   waveHeight: 34, waveStyle: "bars", waveBars: 240, coverColors: true, coverTint: true,
   appIcon: "yuuri", scView: "list", onboarded: false, checkUpdates: true, skipVersion: "",
   ignoreThe: true, scanOnStart: true,
-  singleClick: false, fade: true, rememberModes: false, shuffle: false, repeat: REPEAT_OFF, resume: true,
+  singleClick: false, fade: true, rememberModes: false, shuffle: SHUFFLE_OFF, repeat: REPEAT_OFF, resume: true,
 };
 const COVER_SIZES = { small: "120px", medium: "156px", large: "200px" };
 let prefs = { ...DEFAULT_PREFS };
@@ -171,7 +176,7 @@ async function load() {
   prefs = { ...DEFAULT_PREFS, ...linuxDefaults, ...(snap.settings.ui || {}) };
   applyPrefs();
   if (prefs.rememberModes) {
-    setShuffle(prefs.shuffle);
+    setShuffle(shuffleMode(prefs.shuffle));
     setRepeat(prefs.repeat);
   }
   baseVolume = audio.volume = state.settings.volume;
@@ -520,13 +525,37 @@ function playShown(index) {
   }
   state.queue = [...state.shown];
   state.order = state.queue.map((_, i) => i);
-  if (state.shuffle) {
+  if (state.shuffle === SHUFFLE_RANDOM) {
+    state.order = [index];
+    state.pos = 0;
+    fillRandom();
+  } else if (state.shuffle) {
     state.order = [index, ...shuffled(state.order.filter((i) => i !== index))];
     state.pos = 0;
   } else {
     state.pos = index;
   }
   playCurrent();
+}
+
+// Random mode keeps the songs already played (so Previous goes back through them) and picks the
+// next RANDOM_AHEAD songs in advance, so the queue can show what's coming and "Play next" works.
+const RANDOM_AHEAD = 25;
+const RANDOM_HISTORY = 500;
+function fillRandom() {
+  const n = state.queue.length;
+  if (!n) return;
+  if (state.pos > RANDOM_HISTORY) {
+    state.order.splice(0, state.pos - RANDOM_HISTORY);
+    state.pos = RANDOM_HISTORY;
+  }
+  while (state.order.length - state.pos - 1 < RANDOM_AHEAD) {
+    // any song can come up again, just not the same one twice in a row
+    const last = state.order[state.order.length - 1];
+    let pick = Math.floor(Math.random() * n);
+    if (n > 1 && pick === last) pick = (pick + 1 + Math.floor(Math.random() * (n - 1))) % n;
+    state.order.push(pick);
+  }
 }
 
 function playCurrent(autoplay = true) {
@@ -554,6 +583,8 @@ function playCurrent(autoplay = true) {
   loadWaveform(t);
   updateAccent();
   $("locate").hidden = false;
+  renderNowFav();
+  renderQueue();
   saveSession();
 }
 
@@ -634,6 +665,7 @@ function next(auto = false) {
   }
   if (state.pos + 1 < state.order.length) {
     state.pos++;
+    if (state.shuffle === SHUFFLE_RANDOM) fillRandom();
   } else if (state.repeat === REPEAT_ALL) {
     if (state.shuffle) shuffled(state.order);
     state.pos = 0;
@@ -653,19 +685,29 @@ function prev() {
   playCurrent();
 }
 
-function setShuffle(on) {
-  state.shuffle = on;
-  el.shuffle.classList.toggle("on", on);
-  if (prefs.rememberModes && prefs.shuffle !== on) setPref("shuffle", on);
+/** Off → shuffle → random → off. */
+const cycleShuffle = () => setShuffle((state.shuffle + 1) % 3);
+
+function setShuffle(mode) {
+  state.shuffle = mode;
+  el.shuffle.classList.toggle("on", mode !== SHUFFLE_OFF);
+  $("shuffle-icon").setAttribute("href", mode === SHUFFLE_RANDOM ? "#i-random" : "#i-shuffle");
+  el.shuffle.title = ["Shuffle: off", "Shuffle: on", "Random: songs can come up again"][mode];
+  if (prefs.rememberModes && prefs.shuffle !== mode) setPref("shuffle", mode);
   if (!state.order.length) return;
   const cur = state.order[state.pos];
-  if (on) {
+  if (mode === SHUFFLE_RANDOM) {
+    state.order = [cur];
+    state.pos = 0;
+    fillRandom();
+  } else if (mode === SHUFFLE_ON) {
     state.order = [cur, ...shuffled(state.queue.map((_, i) => i).filter((i) => i !== cur))];
     state.pos = 0;
   } else {
     state.order = state.queue.map((_, i) => i);
     state.pos = cur;
   }
+  renderQueue();
 }
 
 const cycleRepeat = () => setRepeat((state.repeat + 1) % 3);
@@ -901,7 +943,7 @@ $("mute").addEventListener("click", () => (audio.muted = !audio.muted));
 el.play.addEventListener("click", togglePlay);
 $("next").addEventListener("click", () => next());
 $("prev").addEventListener("click", prev);
-el.shuffle.addEventListener("click", () => setShuffle(!state.shuffle));
+el.shuffle.addEventListener("click", cycleShuffle);
 el.repeat.addEventListener("click", cycleRepeat);
 
 let searchTimer;
@@ -1113,7 +1155,7 @@ function restoreSession() {
   applySearch(); // drops an artist/album that's no longer in the library
   reveal(el.artistList, el.artistList.querySelector(".sel"), true);
   reveal(el.albumGrid, el.albumGrid.querySelector(".sel"), true);
-  setShuffle(!!s.shuffle);
+  setShuffle(shuffleMode(s.shuffle));
   setRepeat(s.repeat || REPEAT_OFF);
 
   state.sc.current = s.scList || "likes";
@@ -1596,7 +1638,10 @@ async function scFetch(key) {
     else tracks = await invoke("sc_playlist_tracks", { urn: key.slice(3), title: scListName(key) });
     for (const t of tracks) t.scList = key;
     sc.tracks.set(key, tracks);
-    if (key === "likes") sc.liked = new Set(tracks.map((t) => t.urn));
+    if (key === "likes") {
+      sc.liked = new Set(tracks.map((t) => t.urn));
+      renderNowFav();
+    }
   } catch (e) {
     sc.error = String(e);
     setStatus(String(e), 6000);
@@ -1982,8 +2027,108 @@ function playNext(t) {
   state.order.splice(state.pos + 1, 0, state.queue.length - 1);
   setStatus(`“${t.title}” plays next`, 2500);
   if (t.sc) prefetchNext();
+  renderQueue();
   saveSession();
 }
+
+// ------------------------------------------------------- player: heart & queue
+
+/** The heart next to the playing song: a favourite in the library, a like on SoundCloud. */
+function renderNowFav() {
+  const t = current(), b = $("now-fav");
+  b.hidden = !t;
+  if (!t) return;
+  const on = isFav(t);
+  b.classList.toggle("on", on);
+  $("now-fav-icon").setAttribute("href", on ? "#i-heart" : "#i-heart-outline");
+  b.title = t.sc ? (on ? "Unlike on SoundCloud" : "Like on SoundCloud") : on ? "Remove from favourites" : "Add to favourites";
+}
+$("now-fav").addEventListener("click", () => {
+  const t = current();
+  if (t) (t.sc ? scToggleLike(t) : toggleFavorite(t));
+});
+
+const queueOpen = () => !$("queue").hidden;
+function showQueue(open) {
+  $("queue").hidden = !open;
+  $("queue-btn").classList.toggle("on", open);
+  if (open) renderQueue(true);
+}
+// iOS has no volume slider, so the queue button sits with the song instead
+if (ios) document.querySelector(".now").append($("queue-btn"));
+$("queue-btn").addEventListener("click", () => showQueue(!queueOpen()));
+$("queue-close").addEventListener("click", () => showQueue(false));
+document.addEventListener("keydown", (e) => e.key === "Escape" && queueOpen() && showQueue(false));
+
+/** How many songs the queue shows coming up, and already played. */
+const QUEUE_SHOWN = 200, QUEUE_PLAYED_SHOWN = 30;
+
+function queueRowHtml(j, kind) {
+  const t = state.queue[state.order[j]];
+  const remove = kind === "next"
+    ? `<button class="icon-btn" data-remove="${j}" title="Remove from the queue"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>` : "";
+  return `<div class="queue-row ${kind}" data-j="${j}" title="${esc(`${t.title}\n${t.artist}`)}">${coverHtml(thumbOf(t, 100), t.album || t.title)}` +
+    `<div class="queue-text"><div class="name">${kind === "now" && prefs.equalizer ? EQ_HTML : ""}${esc(t.title)}</div><div class="sub">${esc(t.artist)}</div></div>` +
+    `<span class="time">${fmtTime(t.duration)}</span>${remove}</div>`;
+}
+
+/** Draw the queue panel (if it's open): what's playing, what's coming up, and what played before. */
+function renderQueue(scrollToNow = false) {
+  if (!queueOpen()) return;
+  const list = $("queue-list");
+  const pos = state.pos, order = state.order;
+  if (!current()) {
+    $("queue-summary").textContent = "";
+    $("queue-clear").hidden = true;
+    list.innerHTML = `<div class="empty-note">Nothing is playing. Play a song and the rest of its list lines up here.</div>`;
+    return;
+  }
+  const upcoming = order.length - pos - 1;
+  const random = state.shuffle === SHUFFLE_RANDOM;
+  $("queue-summary").textContent = random ? "Random · songs can come up again"
+    : `${upcoming} song${upcoming === 1 ? "" : "s"} up next${state.shuffle ? " · shuffled" : ""}${state.repeat === REPEAT_ALL ? " · repeating" : ""}`;
+  $("queue-clear").hidden = !upcoming || random;
+  let html = "";
+  const played = Math.min(pos, QUEUE_PLAYED_SHOWN);
+  if (played) {
+    html += `<h3 class="queue-section">Played</h3>`;
+    for (let j = pos - played; j < pos; j++) html += queueRowHtml(j, "played");
+  }
+  html += `<h3 class="queue-section">Now playing</h3>` + queueRowHtml(pos, "now");
+  if (upcoming) {
+    html += `<h3 class="queue-section">${random ? "Coming up" : "Up next"}</h3>`;
+    for (let j = pos + 1; j < Math.min(order.length, pos + 1 + QUEUE_SHOWN); j++) html += queueRowHtml(j, "next");
+    if (upcoming > QUEUE_SHOWN) html += `<div class="empty-note">and ${upcoming - QUEUE_SHOWN} more</div>`;
+  }
+  list.innerHTML = html;
+  if (scrollToNow) reveal(list, list.querySelector(".queue-row.now"), true);
+}
+
+$("queue-list").addEventListener("click", (e) => {
+  const remove = e.target.closest("[data-remove]");
+  if (remove) {
+    const j = Number(remove.dataset.remove);
+    if (j <= state.pos) return;
+    state.order.splice(j, 1);
+    if (state.shuffle === SHUFFLE_RANDOM) fillRandom();
+    const keep = $("queue-list").scrollTop;
+    renderQueue();
+    $("queue-list").scrollTop = keep;
+    saveSession();
+    return;
+  }
+  const row = e.target.closest(".queue-row[data-j]");
+  if (!row || row.classList.contains("now")) return;
+  // jump there: songs between here and there stay where they are in the list
+  state.pos = Number(row.dataset.j);
+  if (state.shuffle === SHUFFLE_RANDOM) fillRandom();
+  playCurrent();
+});
+$("queue-clear").addEventListener("click", () => {
+  state.order.length = state.pos + 1;
+  renderQueue();
+  saveSession();
+});
 
 function copyText(text, done) {
   navigator.clipboard.writeText(text).then(() => setStatus(done, 2000), () => setStatus("Couldn't copy", 3000));
@@ -2005,6 +2150,7 @@ async function toggleFavorite(t) {
   const on = !state.favorites.has(t.path);
   const hadAny = state.favorites.size > 0;
   state.favorites = new Set(await invoke("set_favorite", { path: t.path, on }));
+  renderNowFav();
   setStatus(on ? `Added “${t.title}” to favourites` : `Removed “${t.title}” from favourites`, 2500);
   if (state.source !== "local") return;
   const favItem = el.artistList.querySelector(`li[data-key="${FAV_KEY}"]`);
@@ -2029,6 +2175,7 @@ async function scToggleLike(t) {
     return;
   }
   on ? sc.liked.add(t.urn) : sc.liked.delete(t.urn);
+  renderNowFav();
   const likes = sc.tracks.get("likes");
   if (likes) {
     if (on) likes.unshift({ ...t, scList: "likes" });
