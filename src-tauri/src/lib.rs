@@ -405,12 +405,11 @@ async fn sc_connect(app: AppHandle) -> Result<Settings, String> {
     blocking(move || {
         let state = app.state::<AppState>();
         state.sc_cancel.store(false, Ordering::Relaxed);
-        let cfg = state.settings.lock().unwrap().soundcloud.clone();
         let open = |url: &str| app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string());
         #[cfg(desktop)]
-        let cfg = soundcloud::connect(&cfg, open, &state.sc_cancel)?;
+        let cfg = soundcloud::connect(&state.settings.lock().unwrap().soundcloud.clone(), open, &state.sc_cancel)?;
         #[cfg(mobile)]
-        let cfg = phone_sign_in(&state, &cfg, open)?;
+        let cfg = phone_sign_in(&state, open)?;
         let mut s = state.settings.lock().unwrap();
         s.soundcloud = cfg;
         state.save_settings(&s);
@@ -423,10 +422,10 @@ async fn sc_connect(app: AppHandle) -> Result<Settings, String> {
 /// the computer does, so the proxy sends it back as a `yuuricloud://soundcloud-auth` link, which
 /// `open_links` hands to the waiting sign-in here.
 #[cfg(mobile)]
-fn phone_sign_in(state: &AppState, cfg: &soundcloud::ScConfig, open: impl Fn(&str) -> Result<(), String>) -> Result<soundcloud::ScConfig, String> {
-    if cfg.own_app() {
-        return Err("Your own SoundCloud app can't sign in on a phone. Clear its keys, or link from your computer".into());
-    }
+fn phone_sign_in(state: &AppState, open: impl Fn(&str) -> Result<(), String>) -> Result<soundcloud::ScConfig, String> {
+    // Only the shared app can come back to a phone, so it signs in with that even when a link code
+    // from a computer brought the keys of the user's own app along; they go with the old login.
+    let cfg = &soundcloud::ScConfig::default();
     let sign_in = soundcloud::begin_sign_in(cfg, true)?;
     let (tx, rx) = std::sync::mpsc::channel();
     *state.sc_phone_sign_in.lock().unwrap() = Some((sign_in.state().to_string(), tx));
