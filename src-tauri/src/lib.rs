@@ -26,8 +26,18 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
+/// How often and when a song was played, for the smart lists.
+#[derive(Clone, Default, Serialize, serde::Deserialize)]
+struct PlayStat {
+    plays: u32,
+    /// unix time of the last play
+    last: i64,
+}
+
 struct AppState {
     data_dir: PathBuf,
+    /// song path -> plays, saved in stats.json
+    stats: Mutex<HashMap<String, PlayStat>>,
     settings: Mutex<Settings>,
     tracks: Mutex<Vec<Track>>,
     scanning: AtomicBool,
@@ -359,6 +369,37 @@ fn set_playlists(state: State<AppState>, playlists: Vec<library::Playlist>) -> V
     s.playlists = playlists;
     state.save_settings(&s);
     s.playlists.clone()
+}
+
+/// Play counts and last plays for the smart lists.
+#[tauri::command]
+fn get_stats(state: State<AppState>) -> HashMap<String, PlayStat> {
+    state.stats.lock().unwrap().clone()
+}
+
+/// Count a play (the frontend calls this once a song has played long enough to scrobble).
+#[tauri::command]
+fn record_play(state: State<AppState>, path: String) -> PlayStat {
+    let mut stats = state.stats.lock().unwrap();
+    let stat = stats.entry(path).or_default();
+    stat.plays += 1;
+    stat.last = integrations::unix_now();
+    let stat = stat.clone();
+    library::save_json(&state.data_dir.join("stats.json"), &*stats);
+    stat
+}
+
+/// How much to turn a song down so songs sound equally loud (dB, 0 or less). Only songs in the
+/// library and SoundCloud songs in the stream cache are read.
+#[tauri::command]
+async fn loudness(app: AppHandle, path: String) -> Result<f32, String> {
+    let state = app.state::<AppState>();
+    let allowed = state.tracks.lock().unwrap().iter().any(|t| t.path == path) || Path::new(&path).starts_with(state.sc_stream_dir());
+    if !allowed {
+        return Err("Not a library song".into());
+    }
+    let cache = state.data_dir.join("loudness");
+    blocking(move || waveform::loudness_gain(Path::new(&path), &cache)).await
 }
 
 /// Lyrics for the playing song (see lyrics.rs).
@@ -1334,7 +1375,9 @@ pub fn run() {
             let _ = std::fs::create_dir_all(data_dir.join("soundcloud-cache"));
             allow_dir(handle, &data_dir.join("soundcloud-cache"));
 
+            let stats: HashMap<String, PlayStat> = library::load_json(&data_dir.join("stats.json")).unwrap_or_default();
             app.manage(AppState {
+                stats: Mutex::new(stats),
                 data_dir,
                 settings: Mutex::new(settings),
                 tracks: Mutex::new(tracks),
@@ -1378,6 +1421,9 @@ pub fn run() {
             set_app_icon,
             set_favorite,
             set_playlists,
+            get_stats,
+            record_play,
+            loudness,
             lyrics,
             reveal_file,
             sc_like,

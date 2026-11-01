@@ -29,6 +29,7 @@ const state = {
   tracks: [],
   autoFolders: [], // download folders that are always scanned: [{ path, label }]
   favorites: new Set(), // paths of favourite library songs
+  stats: {}, // song path -> { plays, last }
   playlists: [], // [{ id, name, songs: [paths] }]
   query: "",
   artist: null,   // artist key, null = all artists
@@ -54,9 +55,20 @@ const state = {
   },
 };
 
-const audio = new Audio();
-audio.preload = "auto";
+// Two players: the song that's playing, and the next one loading in the other, so it can start
+// without a gap or fade in over the end of this one. `audio` is whichever is playing.
+const players = [new Audio(), new Audio()];
+for (const p of players) p.preload = "auto";
+let audio = players[0];
+const spare = () => (audio === players[0] ? players[1] : players[0]);
+/** Listen to the player that's playing (events from the other one are ignored). */
+function onAudio(type, fn) {
+  for (const p of players) p.addEventListener(type, (e) => e.target === audio && fn(e));
+}
 let baseVolume = 0.7; // the volume slider's value; fades move audio.volume around it
+/** "Normalize volume": how far this song is turned down (1 = not at all). */
+let trackGain = 1;
+const vol = () => baseVolume * trackGain;
 
 // ------------------------------------------------------------- preferences
 
@@ -68,6 +80,7 @@ const DEFAULT_PREFS = {
   waveHeight: 34, waveStyle: "bars", waveBars: 240, coverColors: true, coverTint: true,
   appIcon: "yuuri", scView: "list", onboarded: false, checkUpdates: true, skipVersion: "",
   ignoreThe: true, scanOnStart: true,
+  crossfade: 0, normalize: false, eq: false, eqPreset: "flat", eqCustom: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   singleClick: false, fade: true, rememberModes: false, shuffle: SHUFFLE_OFF, repeat: REPEAT_OFF, resume: true,
 };
 const COVER_SIZES = { small: "120px", medium: "156px", large: "200px" };
@@ -93,8 +106,9 @@ const artistKey = (t) => t.albumArtist.toLowerCase();
 const FAV_KEY = ":fav"; // the "Favourites" entry in the artist list
 const PL_PREFIX = ":pl:"; // playlists in the artist list: ":pl:<id>"
 const playlistOf = (key) => (key?.startsWith(PL_PREFIX) ? state.playlists.find((p) => PL_PREFIX + p.id === key) : null);
-/** Favourites and playlists: lists of songs rather than an artist. */
-const specialList = (key) => key === FAV_KEY || !!playlistOf(key);
+const SMART_PREFIX = ":smart:"; // smart lists: ":smart:<id>"
+/** Favourites, playlists and smart lists: lists of songs rather than an artist. */
+const specialList = (key) => key === FAV_KEY || !!playlistOf(key) || !!smartOf(key);
 const plSets = new Map(); // playlist id -> Set of its song paths
 function plSet(p) {
   if (!plSets.has(p.id)) plSets.set(p.id, new Set(p.songs));
@@ -104,7 +118,30 @@ const inArtist = (t) =>
   state.artist === null ||
   (state.artist === FAV_KEY ? state.favorites.has(t.path)
     : state.artist.startsWith(PL_PREFIX) ? !!playlistOf(state.artist) && plSet(playlistOf(state.artist)).has(t.path)
+    : state.artist.startsWith(SMART_PREFIX) ? smartSet(state.artist).has(t.path)
     : artistKey(t) === state.artist);
+
+// Smart lists, made from how often and when songs were played (see record_play in lib.rs)
+const plays = (t) => state.stats[t.path]?.plays || 0;
+const lastPlayed = (t) => state.stats[t.path]?.last || 0;
+const SMART = [
+  { id: "added", name: "Recently added", list: (ts) => [...ts].sort((a, b) => b.mtime - a.mtime).slice(0, 100) },
+  { id: "most", name: "Most played", list: (ts) => ts.filter(plays).sort((a, b) => plays(b) - plays(a) || lastPlayed(b) - lastPlayed(a)).slice(0, 100) },
+  { id: "recent", name: "Recently played", list: (ts) => ts.filter(lastPlayed).sort((a, b) => lastPlayed(b) - lastPlayed(a)).slice(0, 100) },
+  { id: "never", name: "Never played", list: (ts) => ts.filter((t) => !plays(t)).sort(cmpTracks) },
+  { id: "forgotten", name: "Forgotten favourites", list: (ts) => ts.filter((t) => state.favorites.has(t.path) && Date.now() / 1000 - lastPlayed(t) > 60 * 86400).sort(cmpTracks) },
+];
+const smartOf = (key) => (key?.startsWith(SMART_PREFIX) ? SMART.find((x) => SMART_PREFIX + x.id === key) : null);
+const smartLists = new Map(); // key -> songs, for the current search; cleared on every redraw
+function smartList(key) {
+  if (!smartLists.has(key)) smartLists.set(key, smartOf(key)?.list(state.visible) || []);
+  return smartLists.get(key);
+}
+const smartSets = new Map();
+function smartSet(key) {
+  if (!smartSets.has(key)) smartSets.set(key, new Set(smartList(key).map((t) => t.path)));
+  return smartSets.get(key);
+}
 /** Favourite (library) or liked (SoundCloud). */
 const isFav = (t) => (t.sc ? state.sc.liked.has(t.urn) : state.favorites.has(t.path));
 const albumKey = (t) => artistKey(t) + "\0" + t.album.toLowerCase();
@@ -186,6 +223,7 @@ async function load() {
   state.tracks = snap.tracks;
   state.favorites = new Set(snap.settings.favorites || []);
   state.playlists = snap.settings.playlists || [];
+  state.stats = await invoke("get_stats").catch(() => ({}));
   const linuxDefaults = platform === "linux" ? { blur: false, tint: 0.96 } : {}; // no compositor blur there
   prefs = { ...DEFAULT_PREFS, ...linuxDefaults, ...(snap.settings.ui || {}) };
   applyPrefs();
@@ -193,7 +231,8 @@ async function load() {
     setShuffle(shuffleMode(prefs.shuffle));
     setRepeat(prefs.repeat);
   }
-  baseVolume = audio.volume = state.settings.volume;
+  baseVolume = state.settings.volume;
+  audio.volume = vol();
   el.volume.value = baseVolume;
   setRangeFill(el.volume);
   el.preferTags.checked = state.settings.preferTags;
@@ -318,6 +357,8 @@ function applySearch() {
 }
 
 function renderArtists() {
+  smartLists.clear();
+  smartSets.clear();
   const artists = new Map(); // key -> { name, albums }
   for (const t of state.visible) {
     const k = artistKey(t);
@@ -325,7 +366,7 @@ function renderArtists() {
     artists.get(k).albums.add(albumKey(t));
   }
   const favCount = state.visible.filter((t) => state.favorites.has(t.path)).length;
-  if (state.artist === FAV_KEY ? !favCount : state.artist !== null && !artists.has(state.artist) && !playlistOf(state.artist)) state.artist = null;
+  if (state.artist === FAV_KEY ? !favCount : state.artist !== null && !artists.has(state.artist) && !playlistOf(state.artist) && !smartOf(state.artist)) state.artist = null;
   const keys = [...artists.keys()].sort((a, b) => cmpName(artists.get(a).name, artists.get(b).name));
 
   let n = 0;
@@ -337,6 +378,9 @@ function renderArtists() {
   el.artistList.innerHTML =
     item(null, "All artists", new Set(state.visible.map(albumKey)).size) +
     (favCount ? item(FAV_KEY, "♥ Favourites", favCount) : "") +
+    group("Smart lists") +
+    SMART.map((x) => [x, smartList(SMART_PREFIX + x.id).length]).filter(([x, count]) => count || x.id === "added")
+      .map(([x, count]) => item(SMART_PREFIX + x.id, x.name, count)).join("") +
     group("Playlists") + lists + `<li class="new-playlist" data-new-playlist style="--i:${n++}">＋ New playlist</li>` +
     group("Artists") +
     keys.map((k) => item(k, artists.get(k).name, artists.get(k).albums.size)).join("");
@@ -391,9 +435,11 @@ function renderSongs() {
     inArtist(t) &&
     (state.album === null || albumKey(t) === state.album));
   const pl = state.album === null ? playlistOf(state.artist) : null;
-  if (pl) {
-    // a playlist plays in its own order
-    const at = new Map(pl.songs.map((p, i) => [p, i]));
+  const smart = state.album === null ? smartOf(state.artist) : null;
+  if (pl || smart) {
+    // playlists and smart lists play in their own order
+    const order = pl ? pl.songs : smartList(state.artist).map((t) => t.path);
+    const at = new Map(order.map((p, i) => [p, i]));
     tracks.sort((a, b) => at.get(a.path) - at.get(b.path));
   } else {
     tracks.sort(cmpTracks);
@@ -401,7 +447,7 @@ function renderSongs() {
   const multiDisc = state.album !== null && new Set(tracks.map((t) => t.discNo)).size > 1;
   // phones leave out the artist column when it would say the same thing on every row
   el.songTable.classList.toggle("one-artist", state.artist !== null && !specialList(state.artist));
-  fillSongs(tracks, { multiDisc, hideAlbum: state.album !== null, title: pl ? pl.name : "Songs", numbered: !!pl });
+  fillSongs(tracks, { multiDisc, hideAlbum: state.album !== null, title: pl?.name || smart?.name || "Songs", numbered: !!(pl || smart) });
 }
 
 /** Put `tracks` in the song table. Shared by the library and SoundCloud views. */
@@ -590,12 +636,22 @@ function fillRandom() {
 function playCurrent(autoplay = true) {
   const t = current();
   if (!t) return;
-  if (t.sc) {
-    loadScAudio(t, autoplay);
+  if (pre.path === t.path && !spare().error) {
+    scLoadId++;
+    handOff(autoplay);
   } else {
-    scLoadId++; // drop a SoundCloud download still on its way
-    audio.src = convertFileSrc(t.path);
-    if (autoplay) startPlayback();
+    xfade.pending = false;
+    spare().pause(); // a song still fading out, or one loaded ahead for something else
+    pre.path = null;
+    trackGain = 1;
+    if (t.sc) {
+      loadScAudio(t, autoplay);
+    } else {
+      scLoadId++; // drop a SoundCloud download still on its way
+      setSrc(audio, t.path);
+      measureGain(t, t.path);
+      if (autoplay) startPlayback();
+    }
   }
   el.nowTitle.textContent = t.title;
   el.nowArtist.textContent = t.album ? `${t.artist} — ${t.album}` : t.artist;
@@ -651,21 +707,21 @@ function fadeTo(target, ms) {
 
 // If the window gets hidden mid-fade, finish the fade at once instead of waiting on throttled timers.
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden || audio.paused || audio.volume === baseVolume) return;
+  if (!document.hidden || audio.paused || audio.volume === vol()) return;
   fadeId++;
   if (pausing) {
     pausing = false;
     audio.pause();
   }
-  audio.volume = baseVolume;
+  audio.volume = vol();
 });
 
 function startPlayback() {
   fadeId++;
-  audio.volume = fades() ? 0 : baseVolume;
+  audio.volume = fades() ? 0 : vol();
   audio.play()
-    .then(() => fades() && fadeTo(baseVolume, 300))
-    .catch(() => (audio.volume = baseVolume));
+    .then(() => fades() && fadeTo(vol(), 300))
+    .catch(() => (audio.volume = vol()));
 }
 
 let pausing = false;
@@ -675,7 +731,7 @@ async function pausePlayback() {
   pausing = false;
   if (!faded) return; // cancelled by a play in the meantime
   audio.pause();
-  audio.volume = baseVolume;
+  audio.volume = vol();
 }
 
 function togglePlay() {
@@ -766,41 +822,217 @@ if ("mediaSession" in navigator) {
   ms.setActionHandler("nexttrack", () => next());
 }
 
+// ------------------------------------------------- gapless, crossfade, volume
+
+/** Load a song file into a player. With the equalizer on, the player must ask for it the way the
+ * audio engine is allowed to read it. */
+function setSrc(p, file) {
+  if (graph) p.crossOrigin = "anonymous";
+  else p.removeAttribute("crossorigin");
+  p.src = convertFileSrc(file);
+}
+
+/** The song after this one, if one follows by itself. */
+function upcoming() {
+  if (state.repeat === REPEAT_ONE) return null;
+  if (state.pos + 1 < state.order.length) return state.queue[state.order[state.pos + 1]];
+  // repeating the list in order starts over; a shuffled one is reshuffled first, so it can't be known
+  return state.repeat === REPEAT_ALL && !state.shuffle ? state.queue[state.order[0]] : null;
+}
+
+const pre = { path: null, gain: 1 }; // the next song, loaded in the spare player
+let preloading = null;
+async function preloadNext() {
+  const n = upcoming();
+  if (!n || n.access === "blocked" || pre.path === n.path || preloading === n.path) return;
+  preloading = n.path;
+  try {
+    const file = n.sc ? await invoke("sc_prepare", { urn: n.urn }) : n.path;
+    const gain = await gainOf(file);
+    if (upcoming()?.path !== n.path || xfade.pending) return; // the queue changed meanwhile
+    const p = spare();
+    p.pause();
+    setSrc(p, file);
+    p.load();
+    Object.assign(pre, { path: n.path, gain });
+  } catch {} finally {
+    preloading = null;
+  }
+}
+
+const crossfadeSecs = () => (ios ? 0 : Math.max(0, Number(prefs.crossfade) || 0));
+const xfade = { pending: false };
+
+/** Near the end of a song: load the next one, and start fading into it when crossfading. */
+function lookAhead() {
+  if (audio.paused || !audio.duration) return;
+  const left = audio.duration - audio.currentTime, xf = crossfadeSecs();
+  if (left < Math.max(20, xf + 10)) preloadNext();
+  if (xf > 0 && left <= xf && !xfade.pending && pre.path && pre.path === upcoming()?.path && spare().readyState >= 2) {
+    xfade.pending = true;
+    xfade.ms = left * 1000;
+    scrob.track = null;
+    next(true);
+  }
+}
+
+/** Switch to the song loaded in the spare player: right away, or fading over the old one. */
+function handOff(autoplay) {
+  const old = audio;
+  audio = spare();
+  pre.path = null;
+  trackGain = pre.gain;
+  setMuted(old.muted);
+  showDuration();
+  if (xfade.pending) {
+    xfade.pending = false;
+    fadeOut(old, xfade.ms);
+    audio.currentTime = 0;
+    audio.volume = 0;
+    audio.play().catch(() => {});
+    fadeTo(vol(), xfade.ms);
+    return;
+  }
+  old.pause();
+  if (!autoplay) return;
+  fadeId++;
+  audio.currentTime = 0;
+  audio.volume = vol();
+  audio.play().catch(() => {});
+}
+
+/** Fade a player that's no longer the current one out, then stop it. */
+function fadeOut(p, ms) {
+  const from = p.volume, start = performance.now();
+  const step = () => {
+    if (p === audio) return; // it was picked again
+    const k = Math.min(1, (performance.now() - start) / ms);
+    p.volume = from * (1 - k);
+    if (k < 1 && !p.paused) setTimeout(step, 30);
+    else p.pause();
+  };
+  step();
+}
+
+const gains = new Map(); // file -> volume factor
+/** How far "Normalize volume" turns a song down (1 when it's off or can't tell). */
+async function gainOf(file) {
+  if (!prefs.normalize || ios) return 1;
+  if (!gains.has(file)) gains.set(file, await invoke("loudness", { path: file }).then((db) => 10 ** (db / 20), () => 1));
+  return gains.get(file);
+}
+async function measureGain(t, file) {
+  const g = await gainOf(file);
+  if (current() !== t || g === trackGain) return;
+  trackGain = g;
+  if (!xfade.pending) fadeTo(vol(), 400);
+}
+
+// The equalizer runs the players through the browser's audio engine. That only starts once it's
+// turned on, so with it off nothing about playback changes.
+const EQ_BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+const EQ_PRESETS = {
+  flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  bass: [6, 5, 4, 2, 0, 0, 0, 0, 0, 0],
+  treble: [0, 0, 0, 0, 0, 1, 2, 4, 5, 6],
+  vocal: [-2, -2, -1, 1, 3, 3, 2, 1, 0, -1],
+  rock: [4, 3, 2, 0, -1, -1, 1, 2, 3, 4],
+  electronic: [5, 4, 1, 0, -2, 1, 0, 1, 4, 5],
+  acoustic: [3, 3, 2, 1, 1, 1, 2, 2, 2, 1],
+  loudness: [5, 4, 2, 0, -1, 0, 0, 2, 4, 5],
+};
+let graph = null, graphTrying = false;
+const eqGains = () => (prefs.eqPreset === "custom" && Array.isArray(prefs.eqCustom) ? prefs.eqCustom : EQ_PRESETS[prefs.eqPreset] || EQ_PRESETS.flat);
+
+async function startEqualizer() {
+  if (graph || graphTrying || ios) return;
+  const src = audio.getAttribute("src");
+  if (!src) return; // tried again when a song loads
+  graphTrying = true;
+  // the audio engine may only read songs the player was allowed to fetch; check that works here first
+  const stop = new AbortController();
+  const ok = await fetch(src, { signal: stop.signal }).then((r) => r.ok, () => false);
+  stop.abort(); // the headers were all it needed
+  graphTrying = false;
+  if (!ok) {
+    setPref("eq", false);
+    setStatus("The equalizer can't be used on this system", 6000);
+    return;
+  }
+  const ctx = new AudioContext();
+  const filters = EQ_BANDS.map((f, i) => {
+    const b = ctx.createBiquadFilter();
+    b.type = i === 0 ? "lowshelf" : i === EQ_BANDS.length - 1 ? "highshelf" : "peaking";
+    b.frequency.value = f;
+    b.Q.value = 1.1;
+    return b;
+  });
+  filters.reduce((a, b) => (a.connect(b), b)).connect(ctx.destination);
+  graph = { ctx, filters };
+  for (const p of players) {
+    // reload with the audio engine's permission, keeping the place and whether it was playing
+    const was = p.getAttribute("src");
+    p.crossOrigin = "anonymous";
+    if (was) {
+      const at = p.currentTime, playing = !p.paused;
+      p.src = was;
+      p.addEventListener("loadedmetadata", () => {
+        p.currentTime = at;
+        if (playing) p.play().catch(() => {});
+      }, { once: true });
+    }
+    ctx.createMediaElementSource(p).connect(filters[0]);
+  }
+  applyEq();
+}
+function applyEq() {
+  if (prefs.eq && !graph) startEqualizer();
+  if (!graph) return;
+  const g = prefs.eq ? eqGains() : EQ_PRESETS.flat;
+  graph.filters.forEach((f, i) => (f.gain.value = g[i] || 0));
+}
+onAudio("play", () => {
+  graph?.ctx.resume();
+  if (prefs.eq && !graph) startEqualizer();
+});
+
 // ------------------------------------------------------------------ events
 
-audio.addEventListener("play", () => {
+onAudio("play", () => {
   el.playIcon.setAttribute("href", "#i-pause");
   document.body.classList.remove("paused");
   if (scrob.track !== current()) beginScrobble(current());
   discordSync();
 });
-audio.addEventListener("pause", () => {
+onAudio("pause", () => {
   el.playIcon.setAttribute("href", "#i-play");
   document.body.classList.add("paused");
   discordSync();
   saveSession();
 });
-audio.addEventListener("seeked", () => {
+onAudio("seeked", () => {
   scrob.lastTime = audio.currentTime;
   discordSync();
 });
-audio.addEventListener("ended", () => {
+onAudio("ended", () => {
   scrob.track = null; // so a repeated song scrobbles again
   next(true);
 });
-audio.addEventListener("loadedmetadata", () => {
+function showDuration() {
   el.seek.max = audio.duration || 0;
   el.dur.textContent = fmtTime(audio.duration);
-});
+}
+onAudio("loadedmetadata", showDuration);
 let seeking = false;
-audio.addEventListener("timeupdate", () => {
+onAudio("timeupdate", () => {
   trackListening();
+  lookAhead();
   if (seeking) return;
   el.seek.value = audio.currentTime;
   el.pos.textContent = fmtTime(audio.currentTime);
   setRangeFill(el.seek);
 });
-audio.addEventListener("error", () => {
+onAudio("error", () => {
   if (!audio.getAttribute("src")) return; // cleared while a SoundCloud song downloads
   const t = current();
   // a song the scan couldn't read any length from is almost always an empty or cut-off file,
@@ -952,23 +1184,25 @@ seekWrap.addEventListener("mouseleave", () => {
   wave.hover = -1;
   kickWave();
 });
-audio.addEventListener("play", kickWave);
-audio.addEventListener("seeked", kickWave);
-audio.addEventListener("loadedmetadata", kickWave);
+onAudio("play", kickWave);
+onAudio("seeked", kickWave);
+onAudio("loadedmetadata", kickWave);
 window.addEventListener("resize", kickWave);
 
 let volumeSave;
 el.volume.addEventListener("input", () => {
   fadeId++; // cancel any running fade
-  baseVolume = audio.volume = Number(el.volume.value);
-  audio.muted = false;
+  baseVolume = Number(el.volume.value);
+  audio.volume = vol();
+  setMuted(false);
   setRangeFill(el.volume);
   clearTimeout(volumeSave);
-  volumeSave = setTimeout(() => invoke("set_volume", { volume: audio.volume }), 400);
+  volumeSave = setTimeout(() => invoke("set_volume", { volume: baseVolume }), 400);
 });
-audio.addEventListener("volumechange", () =>
+onAudio("volumechange", () =>
   el.volIcon.setAttribute("href", audio.muted || audio.volume === 0 ? "#i-mute" : "#i-volume"));
-$("mute").addEventListener("click", () => (audio.muted = !audio.muted));
+const setMuted = (on) => players.forEach((p) => (p.muted = on));
+$("mute").addEventListener("click", () => setMuted(!audio.muted));
 
 el.play.addEventListener("click", togglePlay);
 $("next").addEventListener("click", () => next());
@@ -1020,7 +1254,7 @@ el.artistList.addEventListener("click", (e) => {
   state.album = null;
   for (const x of el.artistList.children) x.classList.toggle("sel", x === li);
   renderAlbums();
-  showPane(playlistOf(state.artist) ? "songs" : "albums");
+  showPane(playlistOf(state.artist) || smartOf(state.artist) ? "songs" : "albums");
 });
 el.artistList.addEventListener("dblclick", (e) => e.target.closest("li") && state.source !== "slsk" && playShown(0));
 
@@ -1236,6 +1470,8 @@ function trackListening() {
   const needed = Math.min((t.duration || audio.duration || 0) / 2, 240);
   if (!scrob.done && (t.duration || audio.duration) > 30 && scrob.listened >= needed) {
     scrob.done = true;
+    // counts toward the smart lists, for library songs
+    if (!t.sc) invoke("record_play", { path: t.path }).then((stat) => (state.stats[t.path] = stat), () => {});
     if (lastfmEnabled()) {
       invoke("lastfm_scrobble", { track: trackInfo(t), startedAt: scrob.startedAt })
         .catch((e) => setStatus(String(e), 5000));
@@ -1463,8 +1699,40 @@ function applyPrefs() {
   }
   if (!ios) appWindow.setAlwaysOnTop(prefs.onTop).catch(() => {});
   highlightPlaying();
+  applyEq();
+  if (normalizeShown !== prefs.normalize) {
+    normalizeShown = prefs.normalize;
+    const t = current();
+    if (t && !t.sc) measureGain(t, t.path);
+  }
   if (!el.settings.hidden) syncSettingsUI();
 }
+
+let normalizeShown = null;
+
+/** Settings → Sound: the equalizer's preset and bands. */
+function syncSoundUI() {
+  const xf = crossfadeSecs();
+  $("crossfade-value").textContent = xf ? `· ${xf} s` : "· off (no gap)";
+  $("eq-preset").value = prefs.eqPreset in EQ_PRESETS || prefs.eqPreset === "custom" ? prefs.eqPreset : "flat";
+  const g = eqGains();
+  for (const b of document.querySelectorAll("#eq-bands input")) {
+    b.value = g[b.dataset.band] || 0;
+    setRangeFill(b);
+  }
+  $("eq-bands").classList.toggle("off", !prefs.eq);
+}
+$("eq-preset").addEventListener("change", (e) => setPref("eqPreset", e.target.value));
+$("eq-bands").addEventListener("input", (e) => {
+  const b = e.target.closest("input[data-band]");
+  if (!b) return;
+  // dragging a band starts a custom curve from the one shown
+  const custom = [...eqGains()];
+  custom[b.dataset.band] = Number(b.value);
+  prefs.eqCustom = custom;
+  if (!prefs.eq) prefs.eq = true;
+  setPref("eqPreset", "custom");
+});
 
 function syncSettingsUI() {
   for (const input of el.settings.querySelectorAll("input[data-pref]")) {
@@ -1476,6 +1744,7 @@ function syncSettingsUI() {
       setRangeFill(input);
     }
   }
+  syncSoundUI();
   for (const group of el.settings.querySelectorAll(".segmented[data-pref]")) {
     for (const b of group.children) b.classList.toggle("on", b.dataset.value === String(prefs[group.dataset.pref]));
   }
@@ -1800,7 +2069,8 @@ async function loadScAudio(t, autoplay) {
   try {
     const file = await invoke("sc_prepare", { urn: t.urn });
     if (id !== scLoadId) return; // another song was picked meanwhile
-    audio.src = convertFileSrc(file);
+    setSrc(audio, file);
+    measureGain(t, file);
     setStatus("", 0);
     if (autoplay) startPlayback();
     prefetchNext();
@@ -2244,7 +2514,7 @@ el.artistList.addEventListener("contextmenu", (e) => {
   if (!li || !li.dataset.key) return;
   e.preventDefault();
   const key = li.dataset.key;
-  const songs = () => state.visible.filter((t) => key === FAV_KEY ? state.favorites.has(t.path) : playlistOf(key) ? plSet(playlistOf(key)).has(t.path) : artistKey(t) === key);
+  const songs = () => smartOf(key) ? [...smartList(key)] : state.visible.filter((t) => key === FAV_KEY ? state.favorites.has(t.path) : playlistOf(key) ? plSet(playlistOf(key)).has(t.path) : artistKey(t) === key).sort(cmpTracks);
   const play = { label: "Play", icon: "i-play", action: () => {
     li.click();
     showPane("songs");
@@ -2253,7 +2523,7 @@ el.artistList.addEventListener("contextmenu", (e) => {
   const p = playlistOf(key);
   openMenu(e.clientX, e.clientY, li.title, p
     ? [play, "-", { label: "Rename…", icon: "i-edit", action: () => renamePlaylist(p) }, { label: "Delete playlist…", icon: "i-stop", action: () => deletePlaylist(p) }]
-    : [play, "-", ...playlistMenu(songs().sort(cmpTracks))]);
+    : [play, "-", ...playlistMenu(songs())]);
 });
 
 // ----------------------------------------------------- now playing & lyrics
@@ -2351,8 +2621,8 @@ function syncLyrics() {
   line.classList.add("on");
   box.scrollTo({ top: line.offsetTop - box.clientHeight / 2 + line.offsetHeight / 2, behavior: prefs.animations ? "smooth" : "auto" });
 }
-audio.addEventListener("timeupdate", syncLyrics);
-audio.addEventListener("seeked", () => {
+onAudio("timeupdate", syncLyrics);
+onAudio("seeked", () => {
   lyr.at = -2;
   syncLyrics();
 });
@@ -3894,7 +4164,7 @@ async function saveEditor() {
   }
   editor.saving = false;
   if (wasPlaying) {
-    audio.src = mediaSrc(t.path);
+    setSrc(audio, t.path);
     audio.addEventListener("loadedmetadata", () => (audio.currentTime = at), { once: true });
     if (playing) audio.play().catch(() => {});
   }

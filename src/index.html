@@ -307,6 +307,7 @@
           <button data-tab="motion">Animations</button>
           <button data-tab="library">Library</button>
           <button data-tab="playback">Playback</button>
+          <button data-tab="sound" class="desktop-only">Sound</button>
           <button data-tab="integrations">Integrations</button>
         </nav>
 
@@ -434,6 +435,41 @@
               <div><div class="label">Full rescan</div><div class="hint">Re-read every file instead of only changed ones.</div></div>
               <button id="full-rescan" class="btn">Rescan everything</button>
             </div>
+          </div>
+
+          <div class="tab" data-tab="sound" hidden>
+            <div class="row">
+              <div>
+                <div class="label">Crossfade <span id="crossfade-value" class="hint"></span></div>
+                <div class="hint">Fade into the next song for this many seconds. At 0 the next song starts the moment one ends, with no gap.</div>
+              </div>
+              <input type="range" class="range pref-range" data-pref="crossfade" min="0" max="12" step="1" />
+            </div>
+            <div class="row">
+              <div>
+                <div class="label">Normalize volume</div>
+                <div class="hint">Turn loud songs down so everything plays at about the same volume. Each song is measured the first time it plays.</div>
+              </div>
+              <label class="switch"><input type="checkbox" data-pref="normalize" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Equalizer</div><div class="hint">Shape the sound: pick a preset, or drag the bands.</div></div>
+              <div class="actions">
+                <select id="eq-preset" class="select">
+                  <option value="flat">Flat</option>
+                  <option value="bass">Bass boost</option>
+                  <option value="treble">Treble boost</option>
+                  <option value="vocal">Vocal</option>
+                  <option value="rock">Rock</option>
+                  <option value="electronic">Electronic</option>
+                  <option value="acoustic">Acoustic</option>
+                  <option value="loudness">Loudness</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <label class="switch"><input type="checkbox" data-pref="eq" /><span></span></label>
+              </div>
+            </div>
+            <div id="eq-bands" class="eq-bands"><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="0" /><span>32</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="1" /><span>64</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="2" /><span>125</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="3" /><span>250</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="4" /><span>500</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="5" /><span>1k</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="6" /><span>2k</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="7" /><span>4k</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="8" /><span>8k</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="9" /><span>16k</span></label></div>
           </div>
 
           <div class="tab" data-tab="playback" hidden>

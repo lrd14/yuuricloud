@@ -303,6 +303,15 @@ to **Move up**, **Move down** or remove it, and right-click the playlist itself 
 view of the song with its lyrics. Timed lyrics follow along as it plays, and clicking a line jumps there. Lyrics
 come from [LRCLIB](https://lrclib.net), a free lyrics database; songs it doesn't know show "No lyrics found".
 
+**Smart lists** sit above your playlists and fill themselves: **Recently added**, **Most played**, **Recently
+played**, **Never played** and **Forgotten favourites** (favourites you haven't played in two months). A song
+counts as played at the same point it would scrobble.
+
+**Sound** (Settings → Sound, on a computer): **Crossfade** fades into the next song for up to 12 seconds; at 0 the
+next song starts the moment one ends, with no gap (the iPhone does that too). **Normalize volume** turns loud songs
+down so everything plays at about the same level. The **Equalizer** has presets (bass boost, vocal, rock and
+more) and ten bands to drag.
+
 Right-click a song for **Play next**, **favourites** (♥ Favourites appears at the top of the artist list), **Edit
 song info…** and more. Click the song name in the player to jump to it in the library.
 

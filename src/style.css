@@ -715,6 +715,18 @@ tr.slsk-group.closed .caret { transform: rotate(-90deg); }
 body.ios .settings.ask { width: min(400px, calc(100vw - 32px)); height: auto; max-height: none; border-radius: 14px; border: 1px solid var(--line); padding: 20px 22px 16px; }
 body.ios #ask { place-items: center; }
 
+/* Settings → Sound */
+.select {
+  background: rgba(255, 255, 255, 0.06); color: var(--text); border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px;
+}
+.select option { background: #1d2028; }
+.eq-bands { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px 18px; padding: 4px 0 14px; transition: opacity var(--t-fast); }
+.eq-bands.off { opacity: .45; }
+.eq-band { display: flex; flex-direction: column-reverse; gap: 2px; font-size: 11.5px; color: var(--muted); }
+.eq-band .range { width: 100%; }
+.eq-band .range::-webkit-slider-thumb { opacity: 1; }
+
 /* Now playing: big cover and lyrics, in place of the library */
 body.show-np #library, body.show-np #empty, body.show-np #sc-empty, body.show-np #slsk-empty, body.show-np #downloads { display: none !important; }
 .now .cover.small { cursor: pointer; }
