@@ -3362,10 +3362,30 @@ listen("computer-linked", ({ payload }) => {
 // Phone: copying music from the computer
 const copy = { library: null, picks: new Map(), busy: false }; // picks: key -> songs
 const fmtSize = (n) => fmtBytes(n);
+// The full-window views (a library page, copying music, the remote, now playing, downloads) take
+// turns: opening one closes the others, so they never show on top of each other.
+function closeViewsExcept(keep) {
+  if (keep !== "page" && pageOpen()) showPage(false);
+  if (keep !== "copy" && !$("copy").hidden) showCopy(false);
+  if (keep !== "remote" && !$("remote").hidden) showRemote(false);
+  if (keep !== "np" && npOpen()) showNowPlaying(false);
+  if (keep !== "downloads" && !$("downloads").hidden) showDownloads(false);
+}
+/** The body classes that hide the library behind whichever view is open. */
+function syncViewClasses() {
+  const open = (id) => !$(id).hidden;
+  document.body.classList.toggle("show-page", open("page") || open("copy") || open("remote"));
+  document.body.classList.toggle("show-np", open("np"));
+  document.body.classList.toggle("show-downloads", open("downloads"));
+}
+
 function showCopy(open) {
+  if (open) closeViewsExcept("copy");
+  const wasOpen = !$("copy").hidden;
   $("copy").hidden = !open;
-  document.body.classList.toggle("show-page", open);
-  if (open) loadCopyList();
+  syncViewClasses();
+  // a copy still going keeps its list: it's what's being copied
+  if (open && !wasOpen && !copy.busy) loadCopyList();
 }
 $("pc-copy").addEventListener("click", () => {
   closeSettings();
@@ -3466,8 +3486,9 @@ listen("copy-progress", ({ payload: p }) => {
 // Phone: the remote
 let remoteTimer = null, remoteCover = { id: null, url: "" }, remoteSeeking = false;
 function showRemote(open) {
+  if (open) closeViewsExcept("remote");
   $("remote").hidden = !open;
-  document.body.classList.toggle("show-page", open);
+  syncViewClasses();
   clearInterval(remoteTimer);
   if (open) {
     $("remote-from").textContent = state.settings.computer.name;
@@ -3534,8 +3555,9 @@ $("remote-volume").addEventListener("change", () => invoke("computer_remote", { 
 const pageStack = []; // [{ kind: "artist" | "album", key }], the last one shown
 const pageOpen = () => !$("page").hidden;
 function showPage(open) {
+  if (open) closeViewsExcept("page");
   $("page").hidden = !open;
-  document.body.classList.toggle("show-page", open);
+  syncViewClasses();
   if (!open) pageStack.length = 0;
 }
 function openPage(kind, key) {
@@ -3930,14 +3952,11 @@ $("page-body").addEventListener("click", (e) => {
 const npOpen = () => !$("np").hidden;
 function showNowPlaying(open) {
   if (open && !current()) return;
+  if (open) closeViewsExcept("np");
   $("np").hidden = !open;
-  document.body.classList.toggle("show-np", open);
+  syncViewClasses();
   $("np-btn").classList.toggle("on", open);
-  if (open) {
-    showDownloads(false);
-    showPage(false);
-    renderNowPlaying();
-  }
+  if (open) renderNowPlaying();
 }
 $("np-btn").addEventListener("click", () => showNowPlaying(!npOpen()));
 $("np-artist").addEventListener("click", () => current() && !current().sc && openPage("artist", artistKey(current())));
@@ -4470,10 +4489,9 @@ const viaLabel = (it) => (it.via === "yt-dlp" || (!it.via && !it.t.downloadable)
 
 function showDownloads(open = true) {
   closeSettings();
-  if (open && npOpen()) showNowPlaying(false);
-  if (open && pageOpen()) showPage(false);
-  document.body.classList.toggle("show-downloads", open);
+  if (open) closeViewsExcept("downloads");
   $("downloads").hidden = !open;
+  syncViewClasses();
   if (open) {
     renderDownloads();
     pollSlskTransfers();
