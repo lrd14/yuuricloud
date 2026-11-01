@@ -819,17 +819,43 @@ body.show-page #library, body.show-page #empty, body.show-page #sc-empty, body.s
 .copy-row > .hint { margin: 0; white-space: nowrap; }
 .copy-foot { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 .copy-foot .actions { justify-content: flex-end; }
-.remote-page { grid-template-columns: minmax(0, 1fr); place-items: center; }
-.remote-page .np-main { width: min(100%, 420px); gap: 14px; }
-.remote-page .np-cover { width: min(100%, 300px, 38vh); }
-.remote-page #remote-seek { width: 100%; }
+/* The remote fits whatever room it has: the cover shrinks before the buttons go off the bottom,
+   and on a screen wider than it is tall (an open iPhone Duo, a phone on its side) the cover goes
+   on the left and the controls on the right. */
+#remote { display: block; grid-template-columns: none; container-type: size; overflow-y: auto; padding: 0; }
+#remote .np-main {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  width: min(100%, 440px); min-height: 100%; margin: 0 auto; padding: 18px 20px;
+}
+#remote .np-cover { width: min(100%, 300px, max(72px, 100cqh - 330px)); flex: none; }
+#remote .np-info { text-align: center; width: 100%; flex: none; }
+#remote .remote-controls { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
+#remote-seek { width: 100%; }
 .remote-times { display: flex; justify-content: space-between; width: 100%; color: var(--muted); font-size: 12px; margin-top: -8px; font-variant-numeric: tabular-nums; }
-.remote-page .buttons { gap: 26px; }
+#remote .buttons { gap: 26px; }
 .remote-volume { display: flex; align-items: center; gap: 10px; width: 100%; color: var(--muted); }
+@container (min-aspect-ratio: 5/4) {
+  #remote .np-main {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr auto auto auto 1fr;
+    grid-template-areas: "cover ." "cover kind" "cover info" "cover controls" "cover .";
+    width: min(100%, 900px); column-gap: clamp(20px, 5cqw, 56px); row-gap: 10px; align-items: center; justify-content: center;
+  }
+  #remote .np-cover { grid-area: cover; width: min(44cqw, 100cqh - 48px, 380px); }
+  #remote-from { grid-area: kind; }
+  #remote .np-info { grid-area: info; text-align: left; }
+  #remote .remote-controls { grid-area: controls; align-items: stretch; }
+  #remote .buttons { justify-content: center; }
+}
+/* very short, like a phone on its side: tighter, and the computer's name makes room */
+@container (max-height: 320px) {
+  #remote .np-main { row-gap: 5px; padding-top: 10px; padding-bottom: 10px; }
+  #remote .remote-controls { gap: 6px; }
+  #remote-from { display: none; }
+  #remote .np-title { font-size: 19px; }
+  #remote .remote-times { margin-top: -4px; }
+}
 .remote-volume .range { flex: 1; }
 body.show-page #np { display: none !important; }
-body.phone .remote-page .np-main { flex-direction: column; align-items: center; }
-body.phone .remote-page .np-info { text-align: center; }
 .int-nav { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 
 /* Now playing: big cover and lyrics, in place of the library */
