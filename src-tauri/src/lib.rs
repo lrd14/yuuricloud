@@ -10,6 +10,7 @@ mod history;
 mod integrations;
 mod library;
 mod lyrics;
+mod musicbrainz;
 #[cfg(desktop)]
 mod share;
 mod slsk;
@@ -1571,6 +1572,62 @@ async fn save_song_tags(
     .await
 }
 
+/// Change some fields of several songs at once (editing an album, or tagging it from
+/// MusicBrainz): each song gets its own changes, and all get the same cover change.
+#[derive(serde::Deserialize)]
+struct SongChanges {
+    path: String,
+    changes: editor::TagChanges,
+}
+
+#[tauri::command]
+async fn save_many_tags(app: AppHandle, songs: Vec<SongChanges>, cover: editor::CoverEdit) -> Result<(), String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut failed = Vec::new();
+        for s in &songs {
+            let path = library_song(&state, &s.path)?;
+            if let Err(e) = editor::change(&path, &s.changes, &cover) {
+                failed.push(e);
+            }
+        }
+        match failed.len() {
+            0 => Ok(()),
+            n if n == songs.len() => Err(failed.swap_remove(0)),
+            n => Err(format!("Saved, but {n} of the {} songs couldn't be changed: {}", songs.len(), failed[0])),
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn mb_search_song(title: String, artist: String, album: String) -> Result<Vec<musicbrainz::SongMatch>, String> {
+    blocking(move || musicbrainz::search_song(&title, &artist, &album)).await
+}
+
+#[tauri::command]
+async fn mb_search_album(album: String, artist: String) -> Result<Vec<musicbrainz::AlbumMatch>, String> {
+    blocking(move || musicbrainz::search_album(&album, &artist)).await
+}
+
+#[tauri::command]
+async fn mb_album_tracks(release_id: String) -> Result<Vec<musicbrainz::AlbumTrack>, String> {
+    blocking(move || musicbrainz::album_tracks(&release_id)).await
+}
+
+/// A release's cover from the Cover Art Archive, saved for the editor to use: the file and a
+/// preview, or None when the release has no cover there.
+#[tauri::command]
+async fn mb_cover(app: AppHandle, release_id: String) -> Result<Option<serde_json::Value>, String> {
+    let dir = app.state::<AppState>().data_dir.join("covers-online");
+    blocking(move || {
+        let Some(path) = musicbrainz::fetch_cover(&release_id, &dir)? else { return Ok(None) };
+        let preview = editor::preview(&std::fs::read(&path).map_err(|e| e.to_string())?)?;
+        Ok(Some(serde_json::json!({ "path": path.to_string_lossy(), "preview": preview })))
+    })
+    .await
+}
+
 #[tauri::command]
 async fn sc_waveform(url: String, bins: usize) -> Result<Vec<f32>, String> {
     blocking(move || soundcloud::waveform(&url, bins)).await
@@ -1698,6 +1755,11 @@ pub fn run() {
             log_listen,
             get_history,
             delete_song,
+            save_many_tags,
+            mb_search_song,
+            mb_search_album,
+            mb_album_tracks,
+            mb_cover,
             loudness,
             lyrics,
             reveal_file,

@@ -98,20 +98,34 @@
             </label>
           </div>
           <div class="editor-fields fields">
-            <label class="wide">Title<input id="ed-title" type="text" spellcheck="false" autocomplete="off" /></label>
+            <label class="wide song-only">Title<input id="ed-title" type="text" spellcheck="false" autocomplete="off" /></label>
             <label class="wide">Artist<input id="ed-artist" type="text" list="ed-artists" spellcheck="false" autocomplete="off" />
               <span id="ed-artist-hint" class="suggest" hidden></span></label>
             <label class="wide">Album artist<input id="ed-album-artist" type="text" list="ed-artists" spellcheck="false" autocomplete="off" />
               <span id="ed-album-artist-hint" class="suggest" hidden></span></label>
             <label class="wide">Album<input id="ed-album" type="text" list="ed-albums" spellcheck="false" autocomplete="off" />
               <span id="ed-album-hint" class="suggest" hidden></span></label>
-            <label>Track<input id="ed-track" type="number" min="0" max="999" /></label>
+            <label class="song-only">Track<input id="ed-track" type="number" min="0" max="999" /></label>
             <label>Disc<input id="ed-disc" type="number" min="0" max="99" /></label>
             <label>Year<input id="ed-year" type="text" inputmode="numeric" maxlength="10" spellcheck="false" autocomplete="off" /></label>
             <div id="ed-path" class="hint path wide"></div>
           </div>
+          <div id="editor-find-panel" class="editor-find" hidden>
+            <div class="find-head">
+              <button id="find-back" class="icon-btn" title="Back to the fields"><svg viewBox="0 0 24 24"><use href="#i-back" /></svg></button>
+              <div class="find-title">Find on MusicBrainz</div>
+              <label class="editor-check"><input id="find-cover" type="checkbox" /><span>Use its cover too</span></label>
+            </div>
+            <form id="find-form" class="find-form">
+              <input id="find-a" type="text" spellcheck="false" autocomplete="off" />
+              <input id="find-b" type="text" spellcheck="false" autocomplete="off" placeholder="Artist" />
+              <button class="btn" type="submit">Search</button>
+            </form>
+            <div id="find-results" class="find-results"></div>
+          </div>
         </div>
         <footer class="editor-foot">
+          <button id="editor-find" class="btn">Find online…</button>
           <span id="editor-error" class="hint err"></span>
           <span class="spacer"></span>
           <button id="editor-cancel" class="btn">Cancel</button>

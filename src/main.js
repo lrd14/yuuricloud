@@ -1449,6 +1449,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     action.run();
   } else if (e.key === "Escape") {
+    if (!$("editor-find-panel").hidden) return ($("editor-find-panel").hidden = true);
     if (!$("editor").hidden) return closeEditor();
     closeSettings();
     if (typing) e.target.blur();
@@ -2719,6 +2720,8 @@ el.albumGrid.addEventListener("contextmenu", (e) => {
     { label: "Album page", icon: "i-grid", action: () => openPage("album", state.albumKeys[card.dataset.i]) },
     "-",
     ...playlistMenu(tracks),
+    "-",
+    { label: "Edit album info…", icon: "i-edit", action: () => openAlbumEditor(tracks) },
   ]);
 });
 
@@ -4964,6 +4967,10 @@ async function openEditor(t) {
     return setStatus(String(e), 6000);
   }
   editor.track = t;
+  editor.tracks = null;
+  editor.trackChanges = null;
+  editor.hadCover = !!tags.cover;
+  setEditorMode("song");
   editor.cover = { kind: "keep" };
   editor.albumSongs = state.tracks.filter((x) => albumKey(x) === albumKey(t));
   const names = libraryNames();
@@ -4986,6 +4993,7 @@ async function openEditor(t) {
   $("editor-cover-all-row").hidden = editor.albumSongs.length < 2;
   $("editor-cover-all").checked = true;
   $("editor-error").textContent = "";
+  $("editor-error").className = "hint err";
   $("editor-save").disabled = false;
   $("editor").hidden = false;
   $("ed-title").focus();
@@ -5000,11 +5008,216 @@ function setEditorCover(src, t = editor.track) {
 function closeEditor() {
   $("editor").hidden = true;
   editor.track = null;
+  editor.tracks = null;
 }
+
+function setEditorMode(mode) {
+  editor.mode = mode;
+  $("editor").querySelector(".editor").classList.toggle("album-mode", mode === "album");
+  $("editor-title").textContent = mode === "album" ? "Edit album info" : "Edit song info";
+  $("editor-find-panel").hidden = true;
+  for (const id of ["ed-artist", "ed-album-artist", "ed-album", "ed-disc", "ed-year"]) $(id).placeholder = "";
+}
+
+/** Edit a whole album at once: the fields all its songs share (left empty where they differ). */
+async function openAlbumEditor(tracks) {
+  closeMenu();
+  const t = tracks[0];
+  let tags = {};
+  try {
+    tags = await invoke("song_tags", { path: t.path });
+  } catch {}
+  editor.track = t;
+  editor.tracks = tracks;
+  editor.trackChanges = null;
+  editor.hadCover = !!tags.cover;
+  setEditorMode("album");
+  editor.cover = { kind: "keep" };
+  editor.albumSongs = tracks;
+  const names = libraryNames();
+  editor.names = names;
+  $("ed-artists").innerHTML = names.artists.map((n) => `<option value="${esc(n)}"></option>`).join("");
+  $("ed-albums").innerHTML = names.albums.map((n) => `<option value="${esc(n)}"></option>`).join("");
+  const common = (f) => (tracks.every((x) => f(x) === f(t)) ? f(t) : null);
+  editor.initial = {};
+  const fill = (id, value) => {
+    $(id).value = value ?? "";
+    if (value === null) $(id).placeholder = "Different on each song — leave to keep";
+    editor.initial[id] = $(id).value;
+  };
+  fill("ed-artist", common((x) => x.artist));
+  fill("ed-album-artist", common((x) => x.albumArtist));
+  fill("ed-album", common((x) => x.album));
+  fill("ed-disc", common((x) => String(x.discNo || "")));
+  fill("ed-year", common((x) => x.year || ""));
+  $("ed-path").textContent = `${countOf(tracks.length, "song")} · ${parentDir(t.path)}`;
+  $("ed-path").title = t.path;
+  for (const id of ["ed-artist-hint", "ed-album-artist-hint", "ed-album-hint"]) $(id).hidden = true;
+  setEditorCover(tags.cover, t);
+  $("editor-cover-all-row").hidden = true;
+  $("editor-cover-all").checked = true;
+  $("editor-error").textContent = "";
+  $("editor-error").className = "hint err";
+  $("editor-save").disabled = false;
+  $("editor").hidden = false;
+  $("ed-album").focus();
+}
+const parentDir = (p) => p.replace(/[\\/][^\\/]*$/, "");
+
+/** Album mode: the fields that were changed, for every song (plus what MusicBrainz matched). */
+function albumChanges() {
+  const changed = {};
+  const map = { "ed-artist": "artist", "ed-album-artist": "albumArtist", "ed-album": "album", "ed-year": "year" };
+  for (const [id, key] of Object.entries(map)) if ($(id).value !== editor.initial[id]) changed[key] = $(id).value;
+  if ($("ed-disc").value !== editor.initial["ed-disc"]) changed.discNo = Math.max(0, Math.floor(Number($("ed-disc").value) || 0));
+  return editor.tracks.map((t) => ({ path: t.path, changes: { ...changed, ...(editor.trackChanges?.get(t.path) || {}) } }))
+    .filter((x) => Object.keys(x.changes).length || editor.cover.kind !== "keep");
+}
+
+/** Close a song's file if it's playing (it can't be rewritten meanwhile); returns how to resume. */
+function releasePlaying(paths) {
+  const t = current();
+  if (!t || !paths.includes(t.path)) return () => {};
+  const at = audio.currentTime, playing = !audio.paused;
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  return () => {
+    setSrc(audio, t.path);
+    audio.addEventListener("loadedmetadata", () => (audio.currentTime = at), { once: true });
+    if (playing) audio.play().catch(() => {});
+  };
+}
+
+async function saveAlbumEditor() {
+  const songs = albumChanges();
+  if (!songs.length) return closeEditor();
+  const resume = releasePlaying(songs.map((x) => x.path));
+  editor.saving = true;
+  $("editor-save").disabled = true;
+  $("editor-error").textContent = "";
+  try {
+    await invoke("save_many_tags", { songs, cover: editor.cover });
+    closeEditor();
+    setStatus(`Saved ${countOf(songs.length, "song")}`, 3000);
+    await rescan(false);
+  } catch (e) {
+    $("editor-error").textContent = String(e);
+    $("editor-save").disabled = false;
+    if (String(e).startsWith("Saved")) await rescan(false);
+  }
+  editor.saving = false;
+  resume();
+}
+
+// ---- Find online (MusicBrainz)
+
+const find = { results: [], token: 0 };
+function openFind() {
+  const album = editor.mode === "album";
+  $("find-a").placeholder = album ? "Album" : "Title";
+  $("find-a").value = album ? $("ed-album").value || editor.track.album : $("ed-title").value;
+  $("find-b").value = (album ? $("ed-album-artist").value : $("ed-artist").value) || $("ed-artist").value || editor.track.artist;
+  $("find-cover").checked = !editor.hadCover && editor.cover.kind !== "file";
+  $("find-results").innerHTML = "";
+  $("editor-find-panel").hidden = false;
+  if ($("find-a").value.trim()) runFind();
+  else $("find-a").focus();
+}
+async function runFind() {
+  const token = ++find.token, album = editor.mode === "album";
+  const a = $("find-a").value.trim(), b = $("find-b").value.trim();
+  if (!a) return;
+  $("find-results").innerHTML = `<div class="hint">Searching…</div>`;
+  try {
+    find.results = album
+      ? await invoke("mb_search_album", { album: a, artist: b })
+      : await invoke("mb_search_song", { title: a, artist: b, album: $("ed-album").value });
+  } catch (e) {
+    if (token === find.token) $("find-results").innerHTML = `<div class="hint err">${esc(String(e))}</div>`;
+    return;
+  }
+  if (token !== find.token) return;
+  const art = (id) => `<div class="find-art"><img src="https://coverartarchive.org/release/${encodeURIComponent(id)}/front-250" alt="" loading="lazy" onerror="this.remove()"></div>`;
+  const len = editor.track.duration;
+  $("find-results").innerHTML = find.results.length
+    ? find.results.map((m, i) => album
+      ? `<button class="find-row" data-i="${i}">${art(m.releaseId)}<div class="find-text"><div>${esc(m.album)}</div>` +
+        `<div class="sub">${esc([m.albumArtist, m.year, m.country, m.format, m.trackCount && countOf(m.trackCount, "song")].filter(Boolean).join(" · "))}</div></div><span class="find-score">${m.score}%</span></button>`
+      : `<button class="find-row" data-i="${i}">${art(m.releaseId)}<div class="find-text"><div>${esc(m.title)} — ${esc(m.artist)}</div>` +
+        `<div class="sub">${esc([m.album, m.year, m.trackNo && `track ${m.trackNo}`, m.length && fmtTime(m.length)].filter(Boolean).join(" · "))}</div></div>` +
+        `<span class="find-score" title="${m.length && len && Math.abs(m.length - len) > 10 ? "A different length from this song" : ""}">${m.length && len && Math.abs(m.length - len) > 10 ? "≠ length" : `${m.score}%`}</span></button>`).join("")
+    : `<div class="hint">Nothing found. Try fewer words, or check the spelling.</div>`;
+}
+
+async function useFound(m) {
+  const album = editor.mode === "album";
+  const set = (id, v) => v != null && v !== "" && ($(id).value = v);
+  if (album) {
+    set("ed-album", m.album);
+    set("ed-album-artist", m.albumArtist);
+    set("ed-year", m.year);
+  } else {
+    set("ed-title", m.title);
+    set("ed-artist", m.artist);
+    set("ed-album", m.album);
+    if (!$("ed-album-artist").value || m.albumArtist !== m.artist) set("ed-album-artist", m.albumArtist);
+    set("ed-year", m.year);
+    set("ed-track", m.trackNo);
+    set("ed-disc", m.discNo);
+  }
+  $("editor-find-panel").hidden = true;
+  $("editor-error").textContent = "";
+  const wantCover = $("find-cover").checked;
+  if (album) {
+    // match the album's songs to the release's, by title, to fix titles and numbers
+    try {
+      const songs = await invoke("mb_album_tracks", { releaseId: m.releaseId });
+      const key = (x) => songIdentity({ artist: "", title: x }).slice(1);
+      const byTitle = new Map(songs.map((s) => [key(s.title), s]));
+      editor.trackChanges = new Map();
+      for (const t of editor.tracks) {
+        const s = byTitle.get(key(t.title)) || (songs.length === editor.tracks.length && !t.trackNo ? null : songs.find((x) => x.trackNo === t.trackNo && x.discNo === (t.discNo || 1) && Math.abs((x.length || 0) - (t.duration || 0)) < 5));
+        if (s) editor.trackChanges.set(t.path, { title: s.title, trackNo: s.trackNo, discNo: songs.some((x) => x.discNo > 1) ? s.discNo : undefined });
+      }
+      $("editor-error").textContent = `Matched ${editor.trackChanges.size} of ${countOf(editor.tracks.length, "song")} to this album's tracks.`;
+      $("editor-error").className = "hint";
+    } catch (e) {
+      $("editor-error").textContent = String(e);
+    }
+  }
+  if (wantCover) {
+    $("editor-cover-change").disabled = true;
+    try {
+      const cover = await invoke("mb_cover", { releaseId: m.releaseId });
+      if (cover) {
+        editor.cover = { kind: "file", path: cover.path };
+        setEditorCover(cover.preview);
+      } else {
+        $("editor-error").textContent = "That release has no cover on the Cover Art Archive.";
+      }
+    } catch (e) {
+      $("editor-error").textContent = String(e);
+    }
+    $("editor-cover-change").disabled = false;
+  }
+}
+
+$("editor-find").addEventListener("click", openFind);
+$("find-back").addEventListener("click", () => ($("editor-find-panel").hidden = true));
+$("find-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  runFind();
+});
+$("find-results").addEventListener("click", (e) => {
+  const row = e.target.closest(".find-row");
+  if (row) useFound(find.results[Number(row.dataset.i)]);
+});
 
 async function saveEditor() {
   const t = editor.track;
   if (!t || editor.saving) return;
+  if (editor.mode === "album") return saveAlbumEditor();
   const num = (id) => (Number($(id).value) > 0 ? Math.floor(Number($(id).value)) : null);
   const edit = {
     title: $("ed-title").value, artist: $("ed-artist").value, albumArtist: $("ed-album-artist").value, album: $("ed-album").value,
@@ -5046,7 +5259,7 @@ $("editor-close").addEventListener("click", closeEditor);
 $("editor-cancel").addEventListener("click", closeEditor);
 $("editor-save").addEventListener("click", saveEditor);
 $("editor").addEventListener("mousedown", (e) => e.target === $("editor") && closeEditor());
-$("editor").addEventListener("keydown", (e) => e.key === "Enter" && e.target.tagName === "INPUT" && saveEditor());
+$("editor").addEventListener("keydown", (e) => e.key === "Enter" && e.target.tagName === "INPUT" && !e.target.closest("#editor-find-panel") && saveEditor());
 $("editor-cover-change").addEventListener("click", async () => {
   try {
     const picked = await invoke("pick_cover_image");

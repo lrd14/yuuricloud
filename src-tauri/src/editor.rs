@@ -57,6 +57,15 @@ fn open(path: &Path) -> Result<lofty::file::TaggedFile, String> {
 }
 
 pub fn read(path: &Path) -> Result<SongTags, String> {
+    read_tags(path, true)
+}
+
+/// The text fields only (no cover preview to make).
+fn read_text(path: &Path) -> Result<SongTags, String> {
+    read_tags(path, false)
+}
+
+fn read_tags(path: &Path, with_cover: bool) -> Result<SongTags, String> {
     let file = open(path)?;
     let tag = file.primary_tag().or_else(|| file.first_tag());
     let text = |f: &dyn Fn(&Tag) -> Option<String>| tag.and_then(f).unwrap_or_default();
@@ -71,7 +80,7 @@ pub fn read(path: &Path) -> Result<SongTags, String> {
         year: text(&|t| {
             [ItemKey::Year, ItemKey::RecordingDate, ItemKey::OriginalReleaseDate].into_iter().find_map(|k| t.get_string(k).map(String::from))
         }),
-        cover: picture.and_then(|b| preview(&b).ok()),
+        cover: picture.filter(|_| with_cover).and_then(|b| preview(&b).ok()),
     })
 }
 
@@ -158,6 +167,61 @@ pub fn write(path: &Path, edit: &TagEdit, cover: &CoverEdit) -> Result<(), Strin
     set_text(tag, ItemKey::Year, &edit.year);
     apply_cover(tag, cover, picture);
     save(&file, path)
+}
+
+/// Changes to some of a song's fields, leaving the rest as they are (editing several songs at
+/// once, or filling in what MusicBrainz knows). A number of 0 takes the number out.
+#[derive(Deserialize, Default, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TagChanges {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album_artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<String>,
+    pub track_no: Option<u32>,
+    pub disc_no: Option<u32>,
+}
+
+impl TagChanges {
+    fn apply_to(&self, e: &mut TagEdit) {
+        let set = |field: &mut String, v: &Option<String>| {
+            if let Some(v) = v {
+                *field = v.clone();
+            }
+        };
+        set(&mut e.title, &self.title);
+        set(&mut e.artist, &self.artist);
+        set(&mut e.album_artist, &self.album_artist);
+        set(&mut e.album, &self.album);
+        set(&mut e.year, &self.year);
+        if let Some(n) = self.track_no {
+            e.track_no = Some(n).filter(|n| *n > 0);
+        }
+        if let Some(n) = self.disc_no {
+            e.disc_no = Some(n).filter(|n| *n > 0);
+        }
+    }
+}
+
+/// Change some fields of a song (and its cover, unless Keep).
+pub fn change(path: &Path, changes: &TagChanges, cover: &CoverEdit) -> Result<(), String> {
+    let now = read_text(path)?;
+    let mut edit = TagEdit {
+        title: now.title,
+        artist: now.artist,
+        album_artist: now.album_artist,
+        album: now.album,
+        track_no: now.track_no,
+        disc_no: now.disc_no,
+        year: now.year,
+    };
+    changes.apply_to(&mut edit);
+    if edit.title.trim().is_empty() {
+        // a song with no title tag shows its file name; keep it that way rather than fail
+        edit.title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    }
+    write(path, &edit, cover)
 }
 
 /// Write only the cover into a song (for "use for the whole album").
