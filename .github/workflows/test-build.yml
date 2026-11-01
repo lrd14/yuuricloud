@@ -1,0 +1,71 @@
+# Builds the computer versions of a branch for testing, without making a release: the files are
+# on the run's page under "Artifacts". Runs on every push to a branch other than main, or by hand.
+name: Test build
+
+on:
+  push:
+    branches-ignore: [main]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: test-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            name: windows
+            args: ""
+          - platform: macos-latest
+            name: mac-apple-silicon
+            args: --target aarch64-apple-darwin
+          - platform: ubuntu-22.04
+            name: linux
+            args: --bundles appimage,deb
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.args }}
+
+      - run: npm ci
+
+      - run: npx tauri build ${{ matrix.args }}
+
+      - name: Collect the files
+        shell: bash
+        run: |
+          mkdir out
+          find src-tauri/target -path '*/release/bundle/*' -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \) -exec cp {} out/ \;
+          # the bare program runs without installing
+          if [ -f src-tauri/target/release/yuuricloud.exe ]; then cp src-tauri/target/release/yuuricloud.exe out/yuuricloud-portable.exe; fi
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yuuricloud-${{ matrix.name }}
+          path: out/*
+          retention-days: 14
