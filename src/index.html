@@ -120,6 +120,22 @@
       </section>
     </div>
 
+    <section id="np" class="np-page" hidden>
+      <div id="np-bg" class="np-bg"></div>
+      <button id="np-close" class="icon-btn np-close" title="Back (Esc)">
+        <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+      </button>
+      <div class="np-main">
+        <div id="np-cover" class="np-cover"></div>
+        <div class="np-info">
+          <div id="np-title" class="np-title"></div>
+          <div id="np-artist" class="np-artist"></div>
+          <div id="np-album" class="np-album"></div>
+        </div>
+      </div>
+      <div id="np-lyrics" class="np-lyrics"></div>
+    </section>
+
     <section id="downloads" class="downloads-page" hidden>
       <header class="dl-head">
         <div>
@@ -242,12 +258,25 @@
         </div>
       </div>
       <div class="volume">
+        <button id="np-btn" class="icon-btn toggle" title="Now playing and lyrics"><svg viewBox="0 0 24 24"><use href="#i-lyrics" /></svg></button>
         <button id="queue-btn" class="icon-btn toggle" title="Queue"><svg viewBox="0 0 24 24"><use href="#i-queue" /></svg></button>
         <button id="mute" class="icon-btn" title="Mute"><svg viewBox="0 0 24 24"><use id="vol-icon" href="#i-volume" /></svg></button>
         <input id="volume" class="range" type="range" min="0" max="1" step="0.01" value="0.7" />
       </div>
     </footer>
     <div id="status" class="status"></div>
+
+    <div id="ask" class="settings-backdrop" hidden>
+      <section class="settings ask" role="dialog" aria-labelledby="ask-title">
+        <h1 id="ask-title"></h1>
+        <p id="ask-text" class="hint"></p>
+        <input id="ask-input" type="text" spellcheck="false" autocomplete="off" maxlength="120" />
+        <footer class="ask-foot">
+          <button id="ask-cancel" class="btn">Cancel</button>
+          <button id="ask-ok" class="btn accent">OK</button>
+        </footer>
+      </section>
+    </div>
 
     <aside id="queue" class="queue-panel" hidden>
       <header class="queue-head">
@@ -879,6 +908,7 @@
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M5 20h14v-2H5zM19 9h-4V3H9v6H5l7 7z" /></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></symbol>
     <symbol id="i-to-top" viewBox="0 0 24 24"><path d="M5 4h14v2H5zm7 4-6 6h4v6h4v-6h4z" /></symbol>
+    <symbol id="i-lyrics" viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2zm3 4v2h10V8zm0 4v2h7v-2z" /></symbol>
     <symbol id="i-random" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2.5 3a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm9 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM12 10.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM7.5 15a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm9 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" /></symbol>
     <symbol id="i-back" viewBox="0 0 24 24"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" /></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" /></symbol>

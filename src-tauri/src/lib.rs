@@ -7,6 +7,7 @@ mod downloads;
 mod editor;
 mod integrations;
 mod library;
+mod lyrics;
 mod slsk;
 mod slsk_native;
 mod soundcloud;
@@ -349,6 +350,22 @@ fn set_favorite(state: State<AppState>, path: String, on: bool) -> Vec<String> {
     }
     state.save_settings(&s);
     s.favorites.clone()
+}
+
+/// Save the playlists (the frontend owns their contents). Returns them as saved.
+#[tauri::command]
+fn set_playlists(state: State<AppState>, playlists: Vec<library::Playlist>) -> Vec<library::Playlist> {
+    let mut s = state.settings.lock().unwrap();
+    s.playlists = playlists;
+    state.save_settings(&s);
+    s.playlists.clone()
+}
+
+/// Lyrics for the playing song (see lyrics.rs).
+#[tauri::command]
+async fn lyrics(app: AppHandle, title: String, artist: String, album: String, duration: f64) -> Result<lyrics::Lyrics, String> {
+    let cache = app.state::<AppState>().data_dir.join("lyrics");
+    blocking(move || lyrics::get(&title, &artist, &album, duration, &cache)).await
 }
 
 /// Show a library song in the system file manager.
@@ -1360,6 +1377,8 @@ pub fn run() {
             cover_accent,
             set_app_icon,
             set_favorite,
+            set_playlists,
+            lyrics,
             reveal_file,
             sc_like,
             sc_download,

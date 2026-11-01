@@ -29,6 +29,7 @@ const state = {
   tracks: [],
   autoFolders: [], // download folders that are always scanned: [{ path, label }]
   favorites: new Set(), // paths of favourite library songs
+  playlists: [], // [{ id, name, songs: [paths] }]
   query: "",
   artist: null,   // artist key, null = all artists
   album: null,    // album key, null = every album of the artist
@@ -90,8 +91,20 @@ const fades = () => prefs.fade && !ios;
 
 const artistKey = (t) => t.albumArtist.toLowerCase();
 const FAV_KEY = ":fav"; // the "Favourites" entry in the artist list
+const PL_PREFIX = ":pl:"; // playlists in the artist list: ":pl:<id>"
+const playlistOf = (key) => (key?.startsWith(PL_PREFIX) ? state.playlists.find((p) => PL_PREFIX + p.id === key) : null);
+/** Favourites and playlists: lists of songs rather than an artist. */
+const specialList = (key) => key === FAV_KEY || !!playlistOf(key);
+const plSets = new Map(); // playlist id -> Set of its song paths
+function plSet(p) {
+  if (!plSets.has(p.id)) plSets.set(p.id, new Set(p.songs));
+  return plSets.get(p.id);
+}
 const inArtist = (t) =>
-  state.artist === null || (state.artist === FAV_KEY ? state.favorites.has(t.path) : artistKey(t) === state.artist);
+  state.artist === null ||
+  (state.artist === FAV_KEY ? state.favorites.has(t.path)
+    : state.artist.startsWith(PL_PREFIX) ? !!playlistOf(state.artist) && plSet(playlistOf(state.artist)).has(t.path)
+    : artistKey(t) === state.artist);
 /** Favourite (library) or liked (SoundCloud). */
 const isFav = (t) => (t.sc ? state.sc.liked.has(t.urn) : state.favorites.has(t.path));
 const albumKey = (t) => artistKey(t) + "\0" + t.album.toLowerCase();
@@ -172,6 +185,7 @@ async function load() {
   state.settings = snap.settings;
   state.tracks = snap.tracks;
   state.favorites = new Set(snap.settings.favorites || []);
+  state.playlists = snap.settings.playlists || [];
   const linuxDefaults = platform === "linux" ? { blur: false, tint: 0.96 } : {}; // no compositor blur there
   prefs = { ...DEFAULT_PREFS, ...linuxDefaults, ...(snap.settings.ui || {}) };
   applyPrefs();
@@ -311,16 +325,20 @@ function renderArtists() {
     artists.get(k).albums.add(albumKey(t));
   }
   const favCount = state.visible.filter((t) => state.favorites.has(t.path)).length;
-  if (state.artist === FAV_KEY ? !favCount : state.artist !== null && !artists.has(state.artist)) state.artist = null;
+  if (state.artist === FAV_KEY ? !favCount : state.artist !== null && !artists.has(state.artist) && !playlistOf(state.artist)) state.artist = null;
   const keys = [...artists.keys()].sort((a, b) => cmpName(artists.get(a).name, artists.get(b).name));
 
   let n = 0;
   const item = (key, name, count) =>
     `<li data-key="${esc(key ?? "")}" class="${key === state.artist ? "sel" : ""}" title="${esc(name)}" style="--i:${n++}">` +
     `<span class="count">${count}</span>${esc(name)}</li>`;
+  const group = (name) => `<li class="group" style="--i:${n++}">${esc(name)}</li>`;
+  const lists = state.playlists.map((p) => item(PL_PREFIX + p.id, p.name, state.visible.filter((t) => plSet(p).has(t.path)).length)).join("");
   el.artistList.innerHTML =
     item(null, "All artists", new Set(state.visible.map(albumKey)).size) +
     (favCount ? item(FAV_KEY, "♥ Favourites", favCount) : "") +
+    group("Playlists") + lists + `<li class="new-playlist" data-new-playlist style="--i:${n++}">＋ New playlist</li>` +
+    group("Artists") +
     keys.map((k) => item(k, artists.get(k).name, artists.get(k).albums.size)).join("");
   if (state.artist === null) el.artistList.firstElementChild?.classList.add("sel");
   el.artistsTitle.textContent = `Artists · ${keys.length}`;
@@ -340,7 +358,7 @@ function renderAlbums() {
   }
   if (state.album !== null && !groups.has(state.album)) state.album = null;
 
-  const oneArtist = state.artist !== null && state.artist !== FAV_KEY;
+  const oneArtist = state.artist !== null && !specialList(state.artist);
   const keys = [...groups.keys()].sort((a, b) => {
     const x = groups.get(a), y = groups.get(b);
     return (!oneArtist ? cmpName(x.artist, y.artist) : 0) ||
@@ -362,22 +380,33 @@ function renderAlbums() {
   renderSongs();
 }
 
+/** Library order: artist, album (by year), disc, track. */
+const cmpTracks = (a, b) =>
+  cmpName(a.albumArtist, b.albumArtist) || cmpYear(a.year, b.year) ||
+  collator.compare(sortName(a.album), sortName(b.album)) ||
+  a.discNo - b.discNo || a.trackNo - b.trackNo || collator.compare(a.title, b.title);
+
 function renderSongs() {
   const tracks = state.visible.filter((t) =>
     inArtist(t) &&
     (state.album === null || albumKey(t) === state.album));
-  tracks.sort((a, b) =>
-    cmpName(a.albumArtist, b.albumArtist) || cmpYear(a.year, b.year) ||
-    collator.compare(sortName(a.album), sortName(b.album)) ||
-    a.discNo - b.discNo || a.trackNo - b.trackNo || collator.compare(a.title, b.title));
+  const pl = state.album === null ? playlistOf(state.artist) : null;
+  if (pl) {
+    // a playlist plays in its own order
+    const at = new Map(pl.songs.map((p, i) => [p, i]));
+    tracks.sort((a, b) => at.get(a.path) - at.get(b.path));
+  } else {
+    tracks.sort(cmpTracks);
+  }
   const multiDisc = state.album !== null && new Set(tracks.map((t) => t.discNo)).size > 1;
   // phones leave out the artist column when it would say the same thing on every row
-  el.songTable.classList.toggle("one-artist", state.artist !== null && state.artist !== FAV_KEY);
-  fillSongs(tracks, { multiDisc, hideAlbum: state.album !== null, title: "Songs" });
+  el.songTable.classList.toggle("one-artist", state.artist !== null && !specialList(state.artist));
+  fillSongs(tracks, { multiDisc, hideAlbum: state.album !== null, title: pl ? pl.name : "Songs", numbered: !!pl });
 }
 
 /** Put `tracks` in the song table. Shared by the library and SoundCloud views. */
-function fillSongs(tracks, { multiDisc = false, hideAlbum = false, title = "Songs" } = {}) {
+function fillSongs(tracks, { multiDisc = false, hideAlbum = false, title = "Songs", numbered = false } = {}) {
+  songTable.numbered = numbered;
   state.shown = tracks;
   state.selected = -1;
   const playing = current()?.path;
@@ -398,14 +427,14 @@ const EQ_HTML = '<span class="eq"><i></i><i></i><i></i></span>';
 
 // The song table only holds the rows in view plus a margin, with spacer rows standing in for
 // the rest. Thousands of real rows made every click, search and scroll in the window slow.
-const songTable = { rowH: 0, start: 0, end: 0, multiDisc: false };
+const songTable = { rowH: 0, start: 0, end: 0, multiDisc: false, numbered: false };
 const ROW_MARGIN = 24; // rows drawn above and below the visible ones
 const ROW_STEP = 16; // redraw only after scrolling this many rows
 const tableWrap = () => el.songBody.closest(".table-wrap");
 
 function songRowHtml(t, i, playing) {
   if (t.group) return slskGroupHtml(t, i);
-  const num = t.slsk ? t.num : t.sc ? i + 1 : songTable.multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || "";
+  const num = t.slsk ? t.num : t.sc || songTable.numbered ? i + 1 : songTable.multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || "";
   const isPlaying = t.path === playing;
   const cls = [isPlaying && "playing", i === state.selected && "sel", t.access === "blocked" && "unplayable", isFav(t) && "fav"].filter(Boolean).join(" ");
   const badge = t.access === "preview" ? '<span class="badge" title="SoundCloud only allows a 30-second preview">PREVIEW</span>'
@@ -585,6 +614,7 @@ function playCurrent(autoplay = true) {
   $("locate").hidden = false;
   renderNowFav();
   renderQueue();
+  renderNowPlaying();
   saveSession();
 }
 
@@ -985,11 +1015,12 @@ el.artistList.addEventListener("click", (e) => {
     if (li.dataset.key) slskSelect(li.dataset.key);
     return;
   }
+  if (li.dataset.newPlaylist !== undefined) return newPlaylist();
   state.artist = li.dataset.key || null;
   state.album = null;
   for (const x of el.artistList.children) x.classList.toggle("sel", x === li);
   renderAlbums();
-  showPane("albums");
+  showPane(playlistOf(state.artist) ? "songs" : "albums");
 });
 el.artistList.addEventListener("dblclick", (e) => e.target.closest("li") && state.source !== "slsk" && playShown(0));
 
@@ -1545,6 +1576,8 @@ $("backup-import").addEventListener("click", async () => {
   if (!r) return;
   state.settings = r.settings;
   state.favorites = new Set(r.settings.favorites || []);
+  state.playlists = r.settings.playlists || [];
+  plSets.clear();
   const linuxDefaults = platform === "linux" ? { blur: false, tint: 0.96 } : {};
   prefs = { ...DEFAULT_PREFS, ...linuxDefaults, ...(r.settings.ui || {}) };
   applyPrefs();
@@ -1552,8 +1585,10 @@ $("backup-import").addEventListener("click", async () => {
   renderNowFav();
   fillIntegrationFields();
   const i = r.imported;
-  const parts = [i.prefs && "settings", `${i.favorites} favourite${i.favorites === 1 ? "" : "s"}`, i.logins && "logins"].filter(Boolean);
-  backupStatus(`Imported ${parts.join(", ")} from “${r.file}”` + (i.waiting ? `. ${i.waiting} more become favourites once those songs are in your library.` : "."));
+  const parts = [i.prefs && "settings", `${i.favorites} favourite${i.favorites === 1 ? "" : "s"}`,
+    i.playlists && `${i.playlists} playlist${i.playlists === 1 ? "" : "s"}`, i.logins && "logins"].filter(Boolean);
+  backupStatus(`Imported ${parts.join(", ")} from “${r.file}”` + (i.waiting ? `. ${i.waiting} more become favourites once those songs are in your library.` : ".") +
+    (i.playlistMissing ? ` ${i.playlistMissing} playlist song${i.playlistMissing === 1 ? " isn't" : "s aren't"} in this library.` : ""));
 });
 listen("favorites-changed", ({ payload }) => {
   state.favorites = new Set(payload);
@@ -2036,8 +2071,18 @@ function songMenu(t, i) {
       { label: fav ? "Remove from favourites" : "Add to favourites", icon: fav ? "i-heart" : "i-heart-outline", on: fav, action: () => toggleFavorite(t) },
       ...(ios ? [] : [{ label: "Open file location", icon: "i-folder", action: () => invoke("reveal_file", { path: t.path }).catch((e) => setStatus(String(e), 5000)) }]),
       "-",
-      { label: "Edit song info…", icon: "i-edit", action: () => openEditor(t) },
+      ...playlistMenu([t]),
     );
+    const pl = playlistOf(state.artist);
+    if (pl && state.album === null) {
+      const at = pl.songs.indexOf(t.path);
+      items.push(
+        { label: `Remove from “${pl.name}”`, icon: "i-stop", action: () => removeFromPlaylist(pl, t) },
+        { label: "Move up", icon: "i-to-top", disabled: at <= 0, action: () => movePlaylistSong(pl, at, at - 1) },
+        { label: "Move down", icon: "i-to-top", disabled: at < 0 || at >= pl.songs.length - 1, action: () => movePlaylistSong(pl, at, at + 1) },
+      );
+    }
+    items.push("-", { label: "Edit song info…", icon: "i-edit", action: () => openEditor(t) });
   }
   return items;
 }
@@ -2070,6 +2115,256 @@ function playNext(t) {
   renderQueue();
   saveSession();
 }
+
+// ---------------------------------------------------------------- playlists
+
+/** Ask for a name (or a yes) in a small dialog. Resolves to the text, true, or null if cancelled. */
+function ask({ title, text = "", value = null, ok = "OK", danger = false }) {
+  const box = $("ask");
+  $("ask-title").textContent = title;
+  $("ask-text").textContent = text;
+  $("ask-text").hidden = !text;
+  const input = $("ask-input");
+  input.hidden = value === null;
+  input.value = value ?? "";
+  $("ask-ok").textContent = ok;
+  $("ask-ok").classList.toggle("danger-accent", danger);
+  box.hidden = false;
+  setTimeout(() => (value === null ? $("ask-ok") : input).focus({ preventScroll: true }), 30);
+  if (value !== null) input.select();
+  return new Promise((resolve) => {
+    const done = (answer) => {
+      box.hidden = true;
+      $("ask-ok").onclick = $("ask-cancel").onclick = input.onkeydown = box.onmousedown = null;
+      resolve(answer);
+    };
+    $("ask-ok").onclick = () => (value === null ? done(true) : input.value.trim() && done(input.value.trim()));
+    $("ask-cancel").onclick = () => done(null);
+    input.onkeydown = (e) => {
+      if (e.key === "Enter" && input.value.trim()) done(input.value.trim());
+      if (e.key === "Escape") done(null);
+    };
+    box.onmousedown = (e) => e.target === box && done(null);
+  });
+}
+
+async function savePlaylists() {
+  state.playlists = await invoke("set_playlists", { playlists: state.playlists });
+  plSets.clear();
+  if (state.source !== "local") return;
+  const scroll = [el.artistList.scrollTop, tableWrap().scrollTop];
+  renderArtists();
+  [el.artistList.scrollTop, tableWrap().scrollTop] = scroll;
+}
+
+/** "Add to …" items for a song menu (or an album's or artist's): one per playlist, and a new one. */
+function playlistMenu(tracks) {
+  const local = tracks.filter((t) => !t.sc && !t.slsk);
+  if (!local.length) return [];
+  const all = (p) => local.every((t) => plSet(p).has(t.path));
+  return [
+    ...state.playlists.map((p) => ({ label: `Add to “${p.name}”`, icon: "i-list", disabled: all(p), action: () => addToPlaylist(p, local) })),
+    { label: "New playlist…", icon: "i-queue", action: () => newPlaylist(local) },
+  ];
+}
+
+async function newPlaylist(tracks = []) {
+  const name = await ask({ title: "New playlist", value: "", ok: "Create" });
+  if (!name) return;
+  const p = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, songs: [] };
+  state.playlists.push(p);
+  if (tracks.length) await addToPlaylist(p, tracks, false);
+  else await savePlaylists();
+  setStatus(`Made the playlist “${name}”`, 2500);
+}
+
+async function addToPlaylist(p, tracks, say = true) {
+  const have = plSet(p);
+  const added = tracks.filter((t) => !have.has(t.path));
+  p.songs.push(...added.map((t) => t.path));
+  await savePlaylists();
+  if (say) setStatus(added.length === 1 ? `Added “${added[0].title}” to “${p.name}”` : `Added ${added.length} songs to “${p.name}”`, 2500);
+}
+
+async function removeFromPlaylist(p, t) {
+  p.songs = p.songs.filter((x) => x !== t.path);
+  await savePlaylists();
+  setStatus(`Removed “${t.title}” from “${p.name}”`, 2500);
+}
+
+async function movePlaylistSong(p, from, to) {
+  const [song] = p.songs.splice(from, 1);
+  p.songs.splice(to, 0, song);
+  await savePlaylists();
+  const i = state.shown.findIndex((t) => t.path === song);
+  if (i >= 0) selectRow(i);
+}
+
+async function renamePlaylist(p) {
+  const name = await ask({ title: "Rename playlist", value: p.name, ok: "Rename" });
+  if (!name) return;
+  p.name = name;
+  await savePlaylists();
+}
+
+async function deletePlaylist(p) {
+  if (!(await ask({ title: `Delete “${p.name}”?`, text: "The songs stay in your library.", ok: "Delete", danger: true }))) return;
+  state.playlists = state.playlists.filter((x) => x !== p);
+  if (state.artist === PL_PREFIX + p.id) state.artist = null;
+  await savePlaylists();
+}
+
+/** The library songs of an album (by its index in the grid), in album order. */
+const albumTracks = (i) => state.visible.filter((t) => albumKey(t) === state.albumKeys[i]).sort(cmpTracks);
+
+// right-click (hold on a phone) an album
+el.albumGrid.addEventListener("contextmenu", (e) => {
+  const card = e.target.closest(".album[data-i]");
+  if (!card || state.source !== "local") return;
+  e.preventDefault();
+  const tracks = albumTracks(Number(card.dataset.i));
+  if (!tracks.length) return;
+  openMenu(e.clientX, e.clientY, tracks[0].album, [
+    { label: "Play", icon: "i-play", action: () => {
+      state.album = state.albumKeys[card.dataset.i];
+      renderSongs();
+      showPane("songs");
+      playShown(0);
+    } },
+    { label: "Play next", icon: "i-queue", action: () => [...tracks].reverse().forEach((t) => playNext(t)) },
+    "-",
+    ...playlistMenu(tracks),
+  ]);
+});
+
+// right-click (hold) an artist or a playlist in the list on the left
+el.artistList.addEventListener("contextmenu", (e) => {
+  if (state.source !== "local") return;
+  const li = e.target.closest("li[data-key]");
+  if (!li || !li.dataset.key) return;
+  e.preventDefault();
+  const key = li.dataset.key;
+  const songs = () => state.visible.filter((t) => key === FAV_KEY ? state.favorites.has(t.path) : playlistOf(key) ? plSet(playlistOf(key)).has(t.path) : artistKey(t) === key);
+  const play = { label: "Play", icon: "i-play", action: () => {
+    li.click();
+    showPane("songs");
+    playShown(0);
+  } };
+  const p = playlistOf(key);
+  openMenu(e.clientX, e.clientY, li.title, p
+    ? [play, "-", { label: "Rename…", icon: "i-edit", action: () => renamePlaylist(p) }, { label: "Delete playlist…", icon: "i-stop", action: () => deletePlaylist(p) }]
+    : [play, "-", ...playlistMenu(songs().sort(cmpTracks))]);
+});
+
+// ----------------------------------------------------- now playing & lyrics
+
+const npOpen = () => !$("np").hidden;
+function showNowPlaying(open) {
+  if (open && !current()) return;
+  $("np").hidden = !open;
+  document.body.classList.toggle("show-np", open);
+  $("np-btn").classList.toggle("on", open);
+  if (open) {
+    showDownloads(false);
+    renderNowPlaying();
+  }
+}
+$("np-btn").addEventListener("click", () => showNowPlaying(!npOpen()));
+$("np-close").addEventListener("click", () => showNowPlaying(false));
+// the cover in the player opens it too (the cover element is replaced for every song)
+document.querySelector(".now").addEventListener("click", (e) => e.target.closest(".cover") && showNowPlaying(!npOpen()));
+document.addEventListener("keydown", (e) => e.key === "Escape" && npOpen() && $("settings").hidden && showNowPlaying(false));
+$("source").addEventListener("click", () => showNowPlaying(false), true);
+
+const lyricsCache = new Map(); // song path -> { synced: [{ t, text }] | null, plain, instrumental } | "error"
+const lyr = { path: null, lines: null, at: -1 };
+
+function renderNowPlaying() {
+  if (!npOpen()) return;
+  const t = current();
+  if (!t) return showNowPlaying(false);
+  $("np-cover").innerHTML = coverHtml(t.cover, t.album || t.title);
+  $("np-bg").innerHTML = t.cover ? `<img src="${esc(mediaSrc(t.cover))}" alt="" onerror="this.remove()">` : "";
+  $("np-title").textContent = t.title;
+  $("np-artist").textContent = t.artist;
+  $("np-album").textContent = [t.album, t.year].filter(Boolean).join(" · ");
+  if (lyr.path !== t.path) loadLyrics(t);
+}
+
+/** "[01:23.45] text" lines into [{ t: seconds, text }]. A line can carry several times. */
+function parseLrc(lrc) {
+  const lines = [];
+  for (const raw of lrc.split(/\r?\n/)) {
+    const times = [...raw.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+    if (!times.length) continue;
+    const text = raw.replace(/\[[^\]]*\]/g, "").trim();
+    for (const m of times) lines.push({ t: Number(m[1]) * 60 + Number(m[2]), text });
+  }
+  return lines.sort((a, b) => a.t - b.t);
+}
+
+async function loadLyrics(t) {
+  lyr.path = t.path;
+  lyr.lines = null;
+  lyr.at = -1;
+  const box = $("np-lyrics");
+  let got = lyricsCache.get(t.path);
+  if (!got) {
+    box.innerHTML = `<p class="np-note">Looking for lyrics…</p>`;
+    try {
+      const r = await invoke("lyrics", { title: t.title, artist: t.artist, album: t.album || "", duration: t.duration || audio.duration || 0 });
+      got = { synced: r.synced ? parseLrc(r.synced) : null, plain: r.plain, instrumental: r.instrumental };
+    } catch {
+      got = "error";
+    }
+    lyricsCache.set(t.path, got);
+    if (lyr.path !== t.path) return; // the song changed meanwhile
+  }
+  const credit = `<p class="np-credit">Lyrics from <a href="#" data-open="https://lrclib.net">LRCLIB</a></p>`;
+  if (got === "error") {
+    box.innerHTML = `<p class="np-note">Couldn't reach the lyrics service.</p>`;
+  } else if (got.synced?.length) {
+    lyr.lines = got.synced;
+    box.innerHTML = got.synced.map((l, i) => `<p class="np-line${l.text ? "" : " gap"}" data-i="${i}">${esc(l.text || "♪")}</p>`).join("") + credit;
+    box.scrollTop = 0;
+    syncLyrics();
+  } else if (got.plain) {
+    box.innerHTML = `<p class="np-note">These lyrics aren't timed to the song.</p>` +
+      got.plain.split("\n").map((l) => `<p class="np-line plain">${esc(l) || "&nbsp;"}</p>`).join("") + credit;
+  } else {
+    box.innerHTML = `<p class="np-note">${got.instrumental ? "Instrumental" : "No lyrics found for this song."}</p>`;
+  }
+}
+
+/** Light up the line being sung and keep it in the middle. */
+function syncLyrics() {
+  if (!lyr.lines || !npOpen()) return;
+  const now = audio.currentTime + 0.2;
+  let at = -1;
+  for (let i = 0; i < lyr.lines.length && lyr.lines[i].t <= now; i++) at = i;
+  if (at === lyr.at) return;
+  lyr.at = at;
+  const box = $("np-lyrics");
+  box.querySelector(".np-line.on")?.classList.remove("on");
+  const line = box.querySelector(`.np-line[data-i="${at}"]`);
+  if (!line) return;
+  line.classList.add("on");
+  box.scrollTo({ top: line.offsetTop - box.clientHeight / 2 + line.offsetHeight / 2, behavior: prefs.animations ? "smooth" : "auto" });
+}
+audio.addEventListener("timeupdate", syncLyrics);
+audio.addEventListener("seeked", () => {
+  lyr.at = -2;
+  syncLyrics();
+});
+$("np-lyrics").addEventListener("click", (e) => {
+  const link = e.target.closest("a[data-open]");
+  if (link) {
+    e.preventDefault();
+    return window.__TAURI__.opener.openUrl(link.dataset.open);
+  }
+  const line = e.target.closest(".np-line[data-i]");
+  if (line && lyr.lines) audio.currentTime = lyr.lines[line.dataset.i].t; // jump to that line
+});
 
 // ------------------------------------------------------- player: heart & queue
 
@@ -2419,6 +2714,7 @@ const viaLabel = (it) => (it.via === "yt-dlp" || (!it.via && !it.t.downloadable)
 
 function showDownloads(open = true) {
   closeSettings();
+  if (open && npOpen()) showNowPlaying(false);
   document.body.classList.toggle("show-downloads", open);
   $("downloads").hidden = !open;
   if (open) {

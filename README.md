@@ -295,6 +295,14 @@ adds it to your favourites, or likes it on SoundCloud. The queue button (bottom 
 phone) shows what's playing, what played before and what's up next: click a song to jump to it, or ✕ to take it
 out.
 
+**Playlists:** click **＋ New playlist** in the list on the left, or right-click (hold on a phone) a song, an
+album or an artist → **Add to “…”** / **New playlist…**. Open a playlist from the left; right-click a song in it
+to **Move up**, **Move down** or remove it, and right-click the playlist itself to rename or delete it.
+
+**Now playing and lyrics:** click the cover in the player (or the speech-bubble button next to the queue) for a big
+view of the song with its lyrics. Timed lyrics follow along as it plays, and clicking a line jumps there. Lyrics
+come from [LRCLIB](https://lrclib.net), a free lyrics database; songs it doesn't know show "No lyrics found".
+
 Right-click a song for **Play next**, **favourites** (♥ Favourites appears at the top of the artist list), **Edit
 song info…** and more. Click the song name in the player to jump to it in the library.
 
@@ -309,7 +317,7 @@ app.
 <p align="center"><img src="docs/settings.png" alt="The Settings window on the Appearance tab" width="820"></p>
 
 **Back up, or move to another device:** Settings → Playback → **Back up settings and favourites**. **Export…**
-saves your settings and favourites to a file; **Import…** on another computer or iPhone puts them back. Favourites
+saves your settings, favourites and playlists to a file; **Import…** on another computer or iPhone puts them back. Favourites
 are matched by title and artist, so they carry over even when the music is in different folders, and songs that
 aren't on the new device yet become favourites once you add them. Tick **Include logins and keys** to bring your
 Last.fm, Soulseek and Discord logins along (keep that file private). On an iPhone, the backup is saved in, and
