@@ -75,7 +75,7 @@ const vol = () => baseVolume * trackGain;
 const ACCENTS = ["#8b7cff", "#5b8cff", "#2fb7c4", "#3fbf7f", "#e2b33c", "#f0864a", "#ef5a6f", "#e06ad0"];
 const DEFAULT_PREFS = {
   accent: ACCENTS[0], blur: true, tint: 0.55, coverSize: "medium", scale: "1", compact: false,
-  showCounts: true, onTop: false,
+  showCounts: true, onTop: false, theme: "dark",
   animations: true, speed: "1", ambient: true, equalizer: true, hoverLift: true, waveform: true,
   waveHeight: 34, waveStyle: "bars", waveBars: 240, coverColors: true, coverTint: true,
   appIcon: "yuuri", scView: "list", onboarded: false, checkUpdates: true, skipVersion: "",
@@ -1121,7 +1121,8 @@ function drawWave() {
     const k = Math.min(1, Math.max(0, (since - frac * 250) / 350));
     return Math.max(0.06, wave.peaks[Math.min(wave.peaks.length - 1, Math.floor(frac * wave.peaks.length))] * (1 - (1 - k) ** 3));
   };
-  const unplayed = "rgba(255,255,255,0.2)", hovered = "rgba(255,255,255,0.42)";
+  const fg = lightTheme() ? "0,0,0" : "255,255,255";
+  const unplayed = `rgba(${fg},0.2)`, hovered = `rgba(${fg},0.42)`;
 
   if (prefs.waveStyle === "smooth") {
     // one mirrored shape through evenly spaced points, softened twice with a 3-point average
@@ -1678,9 +1679,25 @@ function applyAppIcon() {
   invoke("set_app_icon", { name }).catch(() => {});
 }
 
+const systemLight = matchMedia("(prefers-color-scheme: light)");
+const lightTheme = () => prefs.theme === "light" || (prefs.theme === "system" && systemLight.matches);
+systemLight.addEventListener("change", () => prefs.theme === "system" && applyTheme());
+let themeApplied = null;
+/** Light or dark: the page's colors, and the window's own (the blur behind it, on Windows and macOS). */
+function applyTheme() {
+  const light = lightTheme();
+  document.documentElement.classList.toggle("light", light);
+  if (!phone && themeApplied !== prefs.theme) {
+    themeApplied = prefs.theme;
+    appWindow.setTheme?.(prefs.theme === "system" ? null : prefs.theme).catch(() => {});
+  }
+  kickWave();
+}
+
 function applyPrefs() {
   const root = document.documentElement.style;
   const body = document.body.classList;
+  applyTheme();
   updateAccent();
   body.toggle("cover-tint", prefs.coverTint);
   applyAppIcon();
