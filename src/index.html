@@ -56,14 +56,15 @@
     <section id="empty" class="empty" hidden>
       <svg viewBox="0 0 24 24"><use href="#i-note" /></svg>
       <p class="desktop-only">Your library is empty.<br />Add a folder with your music to get started. Songs you download from<br />SoundCloud or Soulseek show up here on their own.</p>
-      <p class="ios-only">Your library is empty.<br />Copy music into yuuricloud's folder: in the Files app it's under<br /><b>On My iPhone → yuuricloud</b>. From a computer, drag it onto yuuricloud<br />in the iPhone's Files tab in Finder (or the Apple Devices app on Windows).</p>
+      <p class="apple-only">Your library is empty.<br />Copy music into yuuricloud's folder: in the Files app it's under<br /><b>On My iPhone → yuuricloud</b>. From a computer, drag it onto yuuricloud<br />in the iPhone's Files tab in Finder (or the Apple Devices app on Windows).</p>
+      <p class="android-only">Your library is empty.<br />Connect the phone to a computer with a cable and copy music into<br /><b>Android/data/cloud.yuuri.player/files/Music</b>, or copy it over Wi-Fi<br />from yuuricloud on your computer (Settings → Integrations → Phone &amp; computer).</p>
       <button id="empty-add" class="btn accent desktop-only">Add music folder</button>
     </section>
 
     <section id="sc-empty" class="empty" hidden>
       <svg viewBox="0 0 24 24"><use href="#i-cloud" /></svg>
       <p class="desktop-only">Connect your SoundCloud account to play your likes and playlists here.</p>
-      <p class="ios-only">Connect your SoundCloud account to play your likes and playlists here.</p>
+      <p class="mobile-only">Connect your SoundCloud account to play your likes and playlists here.</p>
       <button id="sc-open-settings" class="btn accent">Set up SoundCloud</button>
     </section>
 
@@ -454,10 +455,15 @@
           <div class="tab" data-tab="library" hidden>
             <div class="label">Music folders</div>
             <div class="hint desktop-only">Your SoundCloud and Soulseek download folders are always included.</div>
-            <div class="hint ios-only">
+            <div class="hint apple-only">
               yuuricloud plays the music in its own folder. Copy songs into it in the Files app (On My iPhone →
               yuuricloud), or from a computer: drag them onto yuuricloud in the iPhone's Files tab in Finder, or in the
               Apple Devices app on Windows. New songs show up when you come back to the app.
+            </div>
+            <div class="hint android-only">
+              yuuricloud plays the music in its own folder: Android/data/cloud.yuuri.player/files/Music. Copy songs
+              into it from a computer over a cable, or over Wi-Fi from yuuricloud on your computer (Integrations →
+              Phone &amp; computer). New songs show up when you come back to the app.
             </div>
             <ul id="folder-list" class="folder-list"></ul>
             <button id="settings-add-folder" class="btn desktop-only">Add folder…</button>
@@ -553,7 +559,7 @@
                   title and artist there, so they carry over even when the music is in other folders; songs that
                   aren't there yet become favourites once they are.
                 </div>
-                <div class="hint ios-only">Export saves the file in yuuricloud's folder in the Files app. To import, put a backup file there and tap Import.</div>
+                <div class="hint mobile-only">Export saves the file in yuuricloud's folder (see Library). To import, put a backup file there and tap Import.</div>
                 <label class="editor-check backup-logins">
                   <input id="backup-logins" type="checkbox" />
                   <span>Include logins and keys (Last.fm, Soulseek, Discord). Keep that file private. SoundCloud you sign in to on each device.</span>
@@ -601,9 +607,9 @@
                 Play your SoundCloud likes and playlists in the SoundCloud tab. Click <b>Connect</b> and sign in with
                 your SoundCloud account in the browser.
               </p>
-              <p class="hint ios-only">
+              <p class="hint mobile-only">
                 Play your SoundCloud likes and playlists in the SoundCloud tab. Tap <b>Connect</b> and sign in with your
-                SoundCloud account in Safari.
+                SoundCloud account in the browser.
               </p>
               <h4 class="group-title">Account</h4>
               <div class="group">
@@ -617,12 +623,12 @@
                 </div>
               </div>
 
-              <div class="ios-only">
+              <div class="mobile-only">
                 <h4 class="group-title">Or sign in from your computer</h4>
                 <div class="group">
                   <p class="hint phone-steps">
                     On your computer, open yuuricloud → Settings → Integrations → SoundCloud and click <b>Link phone…</b>.
-                    Then point this iPhone's camera at the code it shows and tap <b>Open in yuuricloud</b>. Or copy the
+                    Then point this phone's camera at the code it shows and tap <b>Open in yuuricloud</b>. Or copy the
                     code on the computer and paste it here.
                   </p>
                   <div class="fields">
@@ -638,7 +644,7 @@
                   <div class="row">
                     <div>
                       <div class="label">Use SoundCloud on your iPhone</div>
-                      <div id="sc-phone-status" class="hint">Sign in once more in the browser, then scan the code with the iPhone's camera. The phone gets a login of its own; this computer stays signed in.</div>
+                      <div id="sc-phone-status" class="hint">Sign in once more in the browser, then scan the code with the phone's camera. The phone gets a login of its own; this computer stays signed in.</div>
                     </div>
                     <div class="actions">
                       <button id="sc-phone" class="btn">Link phone…</button>
@@ -649,7 +655,7 @@
                     <img id="sc-phone-qr" alt="QR code that signs the phone in" />
                     <div>
                       <p class="hint">
-                        Point the iPhone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
+                        Point the phone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
                         it in yuuricloud on the phone, under Settings → Integrations → SoundCloud.
                       </p>
                       <p class="hint">Anyone with this code can use your SoundCloud account, so don't share it.</p>
@@ -719,9 +725,9 @@
 
             <!-- Soulseek -->
             <section class="int-panel" data-int="slsk" hidden>
-              <p class="hint ios-only">
+              <p class="hint mobile-only">
                 Search and download music from Soulseek in the Soulseek tab. Songs you download go into yuuricloud's
-                folder and show up in your library. iOS pauses apps in the background, so downloads only keep going
+                folder and show up in your library. Phones pause apps in the background, so downloads only keep going
                 while yuuricloud is open or playing music.
               </p>
               <p class="hint desktop-only">
@@ -784,7 +790,7 @@
                     <div>
                       <div class="label">Share my music library</div>
                       <div class="hint desktop-only">Your Soulseek download folder is always shared. Many Soulseek users won't send files to people who share nothing.</div>
-                      <div class="hint ios-only">Share all the music in yuuricloud's folder, not just your Soulseek downloads. Many Soulseek users won't send files to people who share nothing.</div>
+                      <div class="hint mobile-only">Share all the music in yuuricloud's folder, not just your Soulseek downloads. Many Soulseek users won't send files to people who share nothing.</div>
                     </div>
                     <label class="switch"><input id="slsk-share" type="checkbox" /><span></span></label>
                   </div>
@@ -837,7 +843,7 @@
                     <img id="share-qr" alt="QR code that pairs the phone" />
                     <div>
                       <p class="hint">
-                        Point the iPhone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
+                        Point the phone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
                         it in yuuricloud on the phone, under Settings → Integrations → Phone &amp; computer.
                       </p>
                       <p class="hint">
@@ -849,7 +855,7 @@
                   </div>
                 </div>
               </div>
-              <div class="ios-only">
+              <div class="mobile-only">
                 <p class="hint">
                   Copy music from yuuricloud on your computer over Wi-Fi, and use this phone as a remote for it. Both
                   need to be on the same Wi-Fi.
@@ -863,7 +869,7 @@
                   <div id="pc-pair">
                     <p class="hint phone-steps">
                       On your computer, open yuuricloud → Settings → Integrations → Phone &amp; computer and turn on
-                      <b>Let your phone connect</b>. Then point this iPhone's camera at the code it shows, or paste the code here.
+                      <b>Let your phone connect</b>. Then point this phone's camera at the code it shows, or paste the code here.
                     </p>
                     <div class="fields">
                       <label>Pairing code<input id="pc-code" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="yuuricloud://pair?…" /></label>

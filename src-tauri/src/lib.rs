@@ -729,21 +729,32 @@ fn download_folder(app: &AppHandle, cfg: &downloads::DownloadConfig) -> PathBuf 
 /// once they exist, or on iOS the app's own folder. Returned as (path, label).
 fn auto_folders(app: &AppHandle, s: &Settings) -> Vec<(PathBuf, &'static str)> {
     // iOS keeps Soulseek downloads inside the app's folder, so that one folder covers them
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     let all = {
         let _ = s;
-        [(phone_music_folder(app), "yuuricloud folder in the Files app")]
+        [(phone_music_folder(app), PHONE_FOLDER_LABEL)]
     };
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     let all = [(download_folder(app, &s.downloads), "SoundCloud downloads"), (slsk_download_folder(app, &s.soulseek), "Soulseek downloads")];
     all.into_iter().filter(|(p, _)| p.is_dir()).collect()
 }
 
-/// iOS: the app's Documents folder. The Files app shows it under On My iPhone → yuuricloud, and a
-/// computer can copy music into it through Finder or iTunes file sharing.
+/// Phones: the app's own music folder. On iOS that's its Documents folder, which the Files app
+/// shows under On My iPhone → yuuricloud and a computer can copy into through Finder or iTunes file
+/// sharing. On Android it's the app's Music folder (Android/data/cloud.yuuri.player/files/Music),
+/// which a computer sees over USB.
 #[cfg(target_os = "ios")]
+const PHONE_FOLDER_LABEL: &str = "yuuricloud folder in the Files app";
+#[cfg(target_os = "android")]
+const PHONE_FOLDER_LABEL: &str = "yuuricloud's Music folder";
+
+#[cfg(mobile)]
 fn phone_music_folder(app: &AppHandle) -> PathBuf {
-    app.path().document_dir().unwrap_or_default()
+    #[cfg(target_os = "ios")]
+    let dir = app.path().document_dir();
+    #[cfg(not(target_os = "ios"))]
+    let dir = app.path().audio_dir();
+    dir.unwrap_or_else(|_| app.state::<AppState>().data_dir.join("Music"))
 }
 
 /// Every folder a scan looks in: the user's folders plus the download folders, leaving out any
@@ -910,12 +921,12 @@ fn tool_cancel(state: State<AppState>) {
 /// Where Soulseek downloads go: the chosen folder, or Music/Soulseek. On iOS, a Soulseek folder in
 /// the app's own folder, so downloads are in the library and the Files app.
 fn slsk_download_folder(app: &AppHandle, cfg: &slsk::SlskConfig) -> PathBuf {
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     {
         let _ = cfg;
         phone_music_folder(app).join("Soulseek")
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     {
         if !cfg.folder.is_empty() {
             return PathBuf::from(&cfg.folder);
@@ -946,12 +957,12 @@ fn slsk_shares(settings: &Settings, downloads: &Path) -> Vec<String> {
 /// What the built-in Soulseek client shares. On iOS "share my library" means the app's whole
 /// folder, which the downloads are inside of.
 fn builtin_shares(app: &AppHandle, settings: &Settings, downloads: &Path) -> Vec<String> {
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     {
         let folder = if settings.soulseek.share_library { phone_music_folder(app) } else { downloads.to_path_buf() };
         vec![folder.to_string_lossy().into_owned()]
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     {
         let _ = app;
         slsk_shares(settings, downloads)
@@ -1006,7 +1017,7 @@ async fn slsk_connect(app: AppHandle) -> Result<serde_json::Value, String> {
         let settings = state.settings.lock().unwrap().clone();
         let cfg = &settings.soulseek;
         // iOS can't run slskd, so the app is the Soulseek client itself there
-        let conn = if cfg!(target_os = "ios") || cfg.builtin {
+        let conn = if cfg!(mobile) || cfg.builtin {
             let downloads = slsk_download_folder(&app, cfg);
             slsk::connect_native(cfg, &downloads, &builtin_shares(&app, &settings, &downloads))?
         } else if cfg.external {
@@ -1241,9 +1252,9 @@ async fn computer_library(app: AppHandle) -> Result<serde_json::Value, String> {
 
 /// Where songs copied from the computer go.
 fn copied_folder(app: &AppHandle) -> PathBuf {
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     let root = phone_music_folder(app);
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     let root = app.path().audio_dir().unwrap_or_else(|_| app.state::<AppState>().data_dir.clone());
     root.join("From computer")
 }
@@ -1592,7 +1603,7 @@ pub fn run() {
             let tracks: Vec<Track> = library::load_json(&data_dir.join("library.json")).unwrap_or_default();
 
             let handle = app.handle();
-            #[cfg(target_os = "ios")]
+            #[cfg(mobile)]
             let _ = std::fs::create_dir_all(phone_music_folder(handle));
             // the download folders too: their songs must play before the first scan has run
             for folder in library_roots(handle, &settings) {

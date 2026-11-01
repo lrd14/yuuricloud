@@ -89,14 +89,21 @@ let prefs = { ...DEFAULT_PREFS };
 const appWindow = window.__TAURI__.window.getCurrentWindow();
 // iPads say they're Macs; only a touch screen tells them apart
 const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
-const platform = ios ? "ios" : /Mac/.test(navigator.userAgent) ? "mac" : /Linux/.test(navigator.userAgent) ? "linux" : "windows";
+const android = /Android/.test(navigator.userAgent);
+/** iPhones, iPads and Android: touch screens, the app's own music folder, no windows. */
+const phone = ios || android;
+const platform = ios ? "ios" : android ? "android" : /Mac/.test(navigator.userAgent) ? "mac" : /Linux/.test(navigator.userAgent) ? "linux" : "windows";
 document.body.classList.add(platform);
 document.documentElement.classList.add(platform);
+if (phone) {
+  document.body.classList.add("phone");
+  document.documentElement.classList.add("phone");
+}
 // The iPhone Duo's screens are nearly square, both folded and open; other iPhones are about 2:1
 const duo = /iPhone/.test(navigator.userAgent) && Math.max(screen.width, screen.height) / Math.min(screen.width, screen.height) < 1.7;
 document.body.classList.toggle("duo", duo);
 /** Touch screens play a song on the first tap; there's no double-click there. */
-const tapPlays = () => prefs.singleClick || ios;
+const tapPlays = () => prefs.singleClick || phone;
 /** iOS doesn't let pages change the volume, so there's nothing to fade. */
 const fades = () => prefs.fade && !ios;
 
@@ -249,7 +256,7 @@ async function load() {
   if (hasFolders && (prefs.scanOnStart || !state.tracks.length || needThumbs)) rescan(false);
   if (prefs.checkUpdates) checkForUpdate();
   // first start: walk through setting things up
-  if (!ios && !prefs.onboarded && !state.settings.folders.length && !state.tracks.length) openOnboarding();
+  if (!phone && !prefs.onboarded && !state.settings.folders.length && !state.tracks.length) openOnboarding();
 }
 
 /** `quiet`: a check in the background, which only speaks up (and redraws) when something changed. */
@@ -950,7 +957,7 @@ let graph = null, graphTrying = false;
 const eqGains = () => (prefs.eqPreset === "custom" && Array.isArray(prefs.eqCustom) ? prefs.eqCustom : EQ_PRESETS[prefs.eqPreset] || EQ_PRESETS.flat);
 
 async function startEqualizer() {
-  if (graph || graphTrying || ios) return;
+  if (graph || graphTrying || phone) return;
   const src = audio.getAttribute("src");
   if (!src) return; // tried again when a song loads
   graphTrying = true;
@@ -1385,7 +1392,7 @@ async function syncMaximized() {
   $("win-max-icon").setAttribute("d", max ? "M3.5 1.5h7v7M1.5 3.5h7v7h-7z" : "M2 2h8v8H2z");
   $("win-max").title = max ? "Restore" : "Maximize";
 }
-if (!ios) {
+if (!phone) {
   appWindow.onResized(syncMaximized);
   syncMaximized();
 }
@@ -1663,7 +1670,7 @@ el.nowArtist.addEventListener("click", () => jumpToCurrent(false));
 const APP_ICONS = ["yuuri", "cloud"];
 let appliedIcon = null;
 function applyAppIcon() {
-  if (ios) return; // the home screen icon is fixed
+  if (phone) return; // the home screen icon is fixed
   const name = APP_ICONS.includes(prefs.appIcon) ? prefs.appIcon : APP_ICONS[0];
   if (name === appliedIcon) return;
   appliedIcon = name;
@@ -1696,14 +1703,14 @@ function applyPrefs() {
   root.setProperty("--wave-h", `${prefs.waveHeight}px`);
   if (prefs.waveform && current() && (wave.path !== current().path || wave.bins !== waveBars())) loadWaveform(current());
   else kickWave();
-  if (platform !== "linux" && !ios && blurApplied !== prefs.blur) {
+  if (platform !== "linux" && !phone && blurApplied !== prefs.blur) {
     blurApplied = prefs.blur;
     const done = prefs.blur
       ? appWindow.setEffects({ effects: ["acrylic", "underWindowBackground"], radius: 16 })
       : appWindow.clearEffects();
     done.catch(() => {});
   }
-  if (!ios) appWindow.setAlwaysOnTop(prefs.onTop).catch(() => {});
+  if (!phone) appWindow.setAlwaysOnTop(prefs.onTop).catch(() => {});
   highlightPlaying();
   applyEq();
   if (normalizeShown !== prefs.normalize) {
@@ -1836,7 +1843,7 @@ function backupStatus(text, ok = true) {
 $("backup-export").addEventListener("click", async () => {
   try {
     const file = await invoke("export_backup", { includeLogins: $("backup-logins").checked });
-    if (file) backupStatus(`Saved to ${ios ? `yuuricloud's folder as “${baseName(file)}”` : file}`);
+    if (file) backupStatus(`Saved to ${phone ? `yuuricloud's folder as “${baseName(file)}”` : file}`);
   } catch (e) {
     backupStatus(String(e), false);
   }
@@ -2109,9 +2116,9 @@ function renderScSettings() {
   const status = $("sc-status");
   status.className = "hint" + (connected ? " ok" : "");
   status.textContent = connected ? `Connected as ${sc.username}${ownKeys ? " (your own app)" : ""}`
-    : scWaiting ? (ios ? "Approve access in Safari, then come back here…" : "Approve access in the browser window that opened…")
+    : scWaiting ? (phone ? "Approve access in the browser, then come back here…" : "Approve access in the browser window that opened…")
     : ownKeys ? "Not connected — using your own app" : scBuiltin ? "Not connected" : "Add your Client ID and Client Secret below first.";
-  if (!scBuiltin && !ownKeys && !ios) $("sc-own").open = true;
+  if (!scBuiltin && !ownKeys && !phone) $("sc-own").open = true;
   $("sc-connect").hidden = connected || scWaiting;
   $("sc-connect").disabled = !ownKeys && !scBuiltin;
   $("sc-cancel").hidden = !scWaiting;
@@ -2225,7 +2232,7 @@ listen("sc-link-failed", ({ payload }) => setStatus(String(payload), 6000));
 
 /** Phones show one panel at a time: artists (or SoundCloud lists), then albums, then songs. */
 const phoneQuery = matchMedia("(max-width: 599px), (max-width: 700px) and (max-height: 540px)"); // same as style.css
-const phoneLayout = () => ios && phoneQuery.matches;
+const phoneLayout = () => phone && phoneQuery.matches;
 function showPane(pane) {
   document.body.dataset.pane = pane;
 }
@@ -2239,7 +2246,7 @@ $("albums-all").addEventListener("click", () => {
   showPane("songs");
 });
 
-if (ios) {
+if (phone) {
   // Music copied in with the Files app or Finder shows up when you come back to the app.
   document.addEventListener("visibilitychange", () => !document.hidden && sessionReady && rescan(false, true));
 
@@ -2286,7 +2293,7 @@ document.documentElement.appendChild(ctx);
  */
 let appliedScale = 1;
 function applyInterfaceSize() {
-  if (ios) return; // pinch-free fixed size; the system text size applies instead
+  if (phone) return; // pinch-free fixed size; the system text size applies instead
   const scale = Number(prefs.scale) || 1;
   if (scale === appliedScale) return;
   appliedScale = scale;
@@ -2332,7 +2339,7 @@ function songMenu(t, i) {
       { label: "Open in browser", icon: "i-globe", disabled: !t.permalinkUrl, action: () => window.__TAURI__.opener.openUrl(t.permalinkUrl.split("?")[0]) },
       { label: "Copy link", icon: "i-link", disabled: !t.permalinkUrl, action: () => copyText(t.permalinkUrl.split("?")[0], "Link copied") },
     );
-    if (!ios) {
+    if (!phone) {
       items.push(
         "-",
         canDownload(t)
@@ -2345,7 +2352,7 @@ function songMenu(t, i) {
     const fav = state.favorites.has(t.path);
     items.push(
       { label: fav ? "Remove from favourites" : "Add to favourites", icon: fav ? "i-heart" : "i-heart-outline", on: fav, action: () => toggleFavorite(t) },
-      ...(ios ? [] : [{ label: "Open file location", icon: "i-folder", action: () => invoke("reveal_file", { path: t.path }).catch((e) => setStatus(String(e), 5000)) }]),
+      ...(phone ? [] : [{ label: "Open file location", icon: "i-folder", action: () => invoke("reveal_file", { path: t.path }).catch((e) => setStatus(String(e), 5000)) }]),
       "-",
       ...playlistMenu([t]),
     );
@@ -2541,7 +2548,7 @@ let shareTimer = null;
 function renderPcSettings() {
   const pc = state.settings.computer || {};
   const status = $("pc-status");
-  if (ios) {
+  if (phone) {
     status.textContent = pc.address ? `Paired with ${pc.name}` : "Not paired";
     status.className = "hint" + (pc.address ? " ok" : "");
     $("pc-status-phone").textContent = pc.address ? `${pc.name} · ${pc.address}` : "Not paired";
@@ -3076,7 +3083,7 @@ function showQueue(open) {
   if (open) renderQueue(true);
 }
 // iOS has no volume slider, so the queue button sits with the song instead
-if (ios) document.querySelector(".now").append($("queue-btn"));
+if (phone) document.querySelector(".now").append($("queue-btn"));
 $("queue-btn").addEventListener("click", () => showQueue(!queueOpen()));
 $("queue-close").addEventListener("click", () => showQueue(false));
 document.addEventListener("keydown", (e) => e.key === "Escape" && queueOpen() && showQueue(false));
@@ -3324,7 +3331,7 @@ el.artistList.addEventListener("contextmenu", async (e) => {
       playShown(0);
     } },
   ];
-  if (!ios) items.push(
+  if (!phone) items.push(
     "-",
     { label: loaded ? `Download all (${loaded.filter(canDownload).length} of ${loaded.length})` : "Download all", icon: "i-download",
       action: async () => {
@@ -3526,7 +3533,7 @@ const SLSK_MAX_SEARCHES = 12;
 // Function declarations, not consts: renderDownloads (earlier in the file) runs while the file
 // is still loading and already needs some of these.
 /** The Soulseek client built into the app, instead of slskd: always on iOS, a test switch elsewhere. */
-const slskBuiltin = () => ios || !!state.settings.soulseek?.builtin;
+const slskBuiltin = () => phone || !!state.settings.soulseek?.builtin;
 
 function slskLoggedIn() {
   return !!state.slsk.status?.loggedIn;
@@ -4104,7 +4111,7 @@ function renderSlskTransfers() {
     const cls = slskOk(x) ? "saved" : failed ? "failed" : "";
     const bar = x.state.includes("InProgress") && x.size ? `<div class="dl-bar small"><i style="width:${(x.bytes / x.size) * 100}%"></i></div>` : "";
     const actions = !slskDone(x) ? `<button class="icon-btn" data-act="slsk-cancel" title="Cancel"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`
-      : (x.path && !ios ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
+      : (x.path && !phone ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
         (failed ? `<button class="btn small" data-act="slsk-retry">Retry</button>` : "") +
         `<button class="icon-btn" data-act="slsk-remove" title="Remove from list"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`;
     const name = baseName(x.filename);
