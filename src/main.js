@@ -3431,8 +3431,10 @@ $("copy-go").addEventListener("click", async () => {
   let summary = "";
   try {
     if (songs.length) {
-      const r = await invoke("computer_copy", { songs });
-      summary = `Copied ${countOf(r.copied, "song")}` + (r.skipped ? `, ${r.skipped} already here` : "") + (r.failed ? `, ${r.failed} failed` : "");
+      const r = await invoke("computer_copy", { songs, favorites: copy.library?.favorites || [] });
+      summary = `Copied ${countOf(r.copied, "song")}` + (r.skipped ? `, ${r.skipped} already on this phone` : "") + (r.failed ? `, ${r.failed} failed` : "") +
+        (r.favoritedHere ? `. ${countOf(r.favoritedHere, "favourite")} from ${state.settings.computer?.name || "the computer"} marked here` : "") +
+        (r.favoritedThere ? `. ${countOf(r.favoritedThere, "favourite")} from this phone marked on ${state.settings.computer?.name || "the computer"}` : "");
       await refreshAutoFolders();
       await rescan(false);
     }

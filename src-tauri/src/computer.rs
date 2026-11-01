@@ -30,6 +30,9 @@ impl ComputerLink {
 #[serde(rename_all = "camelCase", default)]
 pub struct SongToCopy {
     pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub duration: f64,
     pub file: String,
     pub album_artist: String,
     pub album: String,
@@ -116,6 +119,36 @@ fn safe(name: &str) -> String {
     if clean.is_empty() { "_".into() } else { clean }
 }
 
+/// Letters and digits only, lower case: "Lil-Darkie " and "lil darkie" are the same name.
+fn name_key(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// The phone's copy of a song from the computer, if it has one already (wherever it is): the same
+/// title by the same artist and about as long, or a file of the same name and size.
+pub fn already_here<'a>(song: &SongToCopy, tracks: &'a [crate::library::Track]) -> Option<&'a crate::library::Track> {
+    let title = name_key(&song.title);
+    let artist = name_key(&song.artist);
+    let artists = [artist.as_str(), name_key(&song.album_artist).as_str()].map(String::from);
+    tracks.iter().find(|t| {
+        let same_file = !song.file.is_empty()
+            && Path::new(&t.path).file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(&song.file))
+            && song.size > 0
+            && std::fs::metadata(&t.path).is_ok_and(|m| m.len() == song.size);
+        let close = song.duration <= 0.0 || t.duration <= 0.0 || (song.duration - t.duration).abs() <= 3.0;
+        let same_song = !title.is_empty()
+            && name_key(&t.title) == title
+            && close
+            && [name_key(&t.artist), name_key(&t.album_artist)].iter().any(|a| !a.is_empty() && artists.iter().any(|b| b == a));
+        same_file || same_song
+    })
+}
+
+/// Tell the computer to make one of its songs a favourite.
+pub fn favorite_there(link: &ComputerLink, id: &str) -> Result<(), String> {
+    call(link, "POST", &format!("/favorite/{id}"), 8).map(|_| ())
+}
+
 /// Where a copied song goes: `<root>/<album artist>/<album>/<file>`.
 pub fn destination(root: &Path, song: &SongToCopy) -> PathBuf {
     root.join(safe(&song.album_artist)).join(safe(&song.album)).join(safe(&song.file))
@@ -174,6 +207,19 @@ mod tests {
         assert_eq!(l, ComputerLink { address: "192.168.1.5:8975".into(), token: "abc123".into(), name: "Noah's PC".into() });
         assert!(from_link("yuuricloud://pair?h=evil.example.com:80&t=x").is_err(), "only addresses on this network");
         assert!(from_link("hello").is_err());
+    }
+
+    #[test]
+    fn finds_songs_already_on_the_phone() {
+        use crate::library::Track;
+        let here = vec![
+            Track { path: "/p/x/Roygbiv.mp3".into(), title: "Roygbiv".into(), artist: "Boards of Canada".into(), album_artist: "Boards of Canada".into(), duration: 151.0, ..Default::default() },
+            Track { path: "/p/y/Live.mp3".into(), title: "Olson".into(), artist: "Boards of Canada".into(), duration: 400.0, ..Default::default() },
+        ];
+        let song = |title: &str, artist: &str, duration: f64| SongToCopy { title: title.into(), artist: artist.into(), album_artist: artist.into(), duration, file: "01.flac".into(), ..Default::default() };
+        assert_eq!(already_here(&song("roygbiv", "Boards Of Canada", 152.4), &here).map(|t| t.path.as_str()), Some("/p/x/Roygbiv.mp3"), "a FLAC of the same song counts");
+        assert!(already_here(&song("Olson", "Boards of Canada", 91.0), &here).is_none(), "a different length is a different version");
+        assert!(already_here(&song("Roygbiv", "Someone Else", 151.0), &here).is_none());
     }
 
     #[test]

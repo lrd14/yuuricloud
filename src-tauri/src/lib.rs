@@ -1326,22 +1326,45 @@ fn copied_folder(app: &AppHandle) -> PathBuf {
 #[derive(Serialize)]
 struct Copied {
     copied: usize,
+    /// already on the phone (anywhere, not only from an earlier copy)
     skipped: usize,
     failed: usize,
+    /// songs made favourites here because they are on the computer, and the other way round
+    favorited_here: usize,
+    favorited_there: usize,
 }
 
 /// Phone: copy songs from the computer, one at a time, saying how far along it is.
 #[tauri::command]
-async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>) -> Result<Copied, String> {
+async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>, favorites: Option<Vec<String>>) -> Result<Copied, String> {
     blocking(move || {
         let state = app.state::<AppState>();
         state.copy_cancel.store(false, Ordering::Relaxed);
         let link = computer_of(&state);
         let root = copied_folder(&app);
+        // the computer's favourites (song ids), to bring along and to compare with the phone's
+        let theirs: std::collections::HashSet<String> = favorites.unwrap_or_default().into_iter().collect();
+        let here = state.tracks.lock().unwrap().clone();
         let total: u64 = songs.iter().map(|s| s.size).sum();
-        let (mut before, mut result) = (0u64, Copied { copied: 0, skipped: 0, failed: 0 });
+        let mut result = Copied { copied: 0, skipped: 0, failed: 0, favorited_here: 0, favorited_there: 0 };
+        let mut before = 0u64;
+        // phone paths to make favourites, and computer songs to make favourites there
+        let (mut fav_here, mut fav_there) = (Vec::new(), Vec::new());
+        let ours: std::collections::HashSet<String> = state.settings.lock().unwrap().favorites.iter().cloned().collect();
         let last = Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
         for (i, song) in songs.iter().enumerate() {
+            // already on the phone, wherever it came from: don't copy it again, just match up
+            // the favourites
+            if let Some(t) = computer::already_here(song, &here) {
+                result.skipped += 1;
+                match (theirs.contains(&song.id), ours.contains(&t.path)) {
+                    (true, false) => fav_here.push(t.path.clone()),
+                    (false, true) => fav_there.push(song.id.clone()),
+                    _ => {}
+                }
+                before += song.size;
+                continue;
+            }
             let report = |done: u64| {
                 let mut last = last.lock().unwrap();
                 if last.elapsed().as_millis() >= 200 {
@@ -1350,13 +1373,37 @@ async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>) -> Resu
                 }
             };
             match computer::copy(&link, song, &root, &state.copy_cancel, &report) {
-                Ok(true) => result.copied += 1,
-                Ok(false) => result.skipped += 1,
+                Ok(copied) => {
+                    if copied {
+                        result.copied += 1;
+                    } else {
+                        result.skipped += 1;
+                    }
+                    if theirs.contains(&song.id) {
+                        fav_here.push(computer::destination(&root, song).to_string_lossy().into_owned());
+                    }
+                }
                 Err(e) if e == "Cancelled" => return Err(e),
                 Err(e) if result.copied == 0 && result.failed == 0 && i == 0 => return Err(e), // can't reach it at all
                 Err(_) => result.failed += 1,
             }
             before += song.size;
+        }
+        if !fav_here.is_empty() {
+            let mut s = state.settings.lock().unwrap();
+            for p in fav_here {
+                if !s.favorites.contains(&p) {
+                    s.favorites.push(p);
+                    result.favorited_here += 1;
+                }
+            }
+            state.save_settings(&s);
+            let _ = app.emit("favorites-changed", s.favorites.clone());
+        }
+        for id in fav_there {
+            if computer::favorite_there(&link, &id).is_ok() {
+                result.favorited_there += 1;
+            }
         }
         Ok(result)
     })
