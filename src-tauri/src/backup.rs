@@ -1,6 +1,7 @@
-//! Backups: settings and favourites in a file, to restore later or move to another device.
+//! Backups: settings, favourites and playlists in a file, to restore later or move to another
+//! device.
 //!
-//! Favourites are saved by title, artist and album rather than by file, since the same song lives
+//! Songs are saved by title, artist and album rather than by file, since the same song lives
 //! somewhere else on every device. Ones that aren't in the library yet wait in
 //! `Settings::pending_favorites` and are matched when a scan finds them.
 //!
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::integrations::{DiscordConfig, LastfmConfig};
-use crate::library::{Settings, Track};
+use crate::library::{Playlist, Settings, Track};
 
 /// A favourite song, described so another library can find it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -20,6 +21,13 @@ pub struct SongRef {
     pub title: String,
     pub artist: String,
     pub album: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlaylistRef {
+    pub name: String,
+    pub songs: Vec<SongRef>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -43,6 +51,7 @@ pub struct Backup {
     pub version: u32,
     pub prefs: Value,
     pub favorites: Vec<SongRef>,
+    pub playlists: Vec<PlaylistRef>,
     pub logins: Option<Logins>,
 }
 
@@ -57,16 +66,24 @@ pub struct Imported {
     pub favorites: usize,
     /// favourites waiting for their songs to turn up here
     pub waiting: usize,
+    /// playlists added or filled in
+    pub playlists: usize,
+    /// playlist songs not in this library
+    pub playlist_missing: usize,
     pub logins: bool,
 }
 
-pub fn make(settings: &Settings, tracks: &[Track], include_logins: bool) -> Backup {
-    let mut favorites: Vec<SongRef> = settings
-        .favorites
+fn song_refs(paths: &[String], tracks: &[Track]) -> Vec<SongRef> {
+    paths
         .iter()
         .filter_map(|path| tracks.iter().find(|t| t.path == *path))
         .map(|t| SongRef { title: t.title.clone(), artist: t.artist.clone(), album: t.album.clone() })
-        .collect();
+        .collect()
+}
+
+pub fn make(settings: &Settings, tracks: &[Track], include_logins: bool) -> Backup {
+    let mut favorites = song_refs(&settings.favorites, tracks);
+    let playlists = settings.playlists.iter().map(|p| PlaylistRef { name: p.name.clone(), songs: song_refs(&p.songs, tracks) }).collect();
     favorites.extend(settings.pending_favorites.iter().cloned());
     let logins = include_logins.then(|| Logins {
         lastfm: settings.lastfm.clone(),
@@ -77,7 +94,7 @@ pub fn make(settings: &Settings, tracks: &[Track], include_logins: bool) -> Back
         soundcloud_client_secret: settings.soundcloud.client_secret.clone(),
         soundcloud_redirect_uri: settings.soundcloud.redirect_uri.clone(),
     });
-    Backup { app: APP.into(), version: 1, prefs: settings.ui.clone(), favorites, logins }
+    Backup { app: APP.into(), version: 1, prefs: settings.ui.clone(), favorites, playlists, logins }
 }
 
 pub fn parse(text: &str) -> Result<Backup, String> {
@@ -115,6 +132,30 @@ pub fn apply(backup: Backup, settings: &mut Settings, tracks: &[Track]) -> Impor
     let favorites = settings.favorites.len() - before;
     waiting = settings.pending_favorites.len() - waiting;
 
+    // a playlist of the same name gets the songs it doesn't have yet added to its end
+    let (mut playlists, mut playlist_missing) = (0, 0);
+    for (n, list) in backup.playlists.into_iter().enumerate() {
+        let i = match settings.playlists.iter().position(|p| p.name == list.name) {
+            Some(i) => i,
+            None => {
+                let id = format!("b{}-{n}", crate::integrations::unix_now());
+                settings.playlists.push(Playlist { id, name: list.name, songs: Vec::new() });
+                settings.playlists.len() - 1
+            }
+        };
+        let had = settings.playlists[i].songs.len();
+        for song in &list.songs {
+            match find(song, tracks) {
+                Some(path) if !settings.playlists[i].songs.contains(&path) => settings.playlists[i].songs.push(path),
+                Some(_) => {}
+                None => playlist_missing += 1,
+            }
+        }
+        if settings.playlists[i].songs.len() > had || had == 0 {
+            playlists += 1;
+        }
+    }
+
     let logins = backup.logins.is_some();
     if let Some(l) = backup.logins {
         settings.lastfm = l.lastfm;
@@ -130,7 +171,7 @@ pub fn apply(backup: Backup, settings: &mut Settings, tracks: &[Track]) -> Impor
         sc.client_secret = l.soundcloud_client_secret;
         sc.redirect_uri = l.soundcloud_redirect_uri;
     }
-    Imported { prefs, favorites, waiting, logins }
+    Imported { prefs, favorites, waiting, playlists, playlist_missing, logins }
 }
 
 /// Favourites still waiting that are in the library now. Returns whether any were found.
@@ -206,6 +247,7 @@ mod tests {
         let pc = vec![track("C:/m/a.mp3", "Let It Be", "The Beatles", "Let It Be"), track("C:/m/b.mp3", "Yesterday", "The Beatles", "Help!")];
         let mut from = Settings { favorites: vec!["C:/m/a.mp3".into(), "C:/m/b.mp3".into()], ..Default::default() };
         from.ui = serde_json::json!({ "accent": "#ff0000" });
+        from.playlists = vec![Playlist { id: "1".into(), name: "Mix".into(), songs: vec!["C:/m/b.mp3".into(), "C:/m/a.mp3".into()] }];
         let text = serde_json::to_string(&make(&from, &pc, false)).unwrap();
 
         // the phone has one of them, in another folder and spelled a little differently
@@ -216,6 +258,9 @@ mod tests {
         let mut to = Settings { ui: serde_json::json!({ "compact": true }), ..Default::default() };
         let done = apply(parse(&text).unwrap(), &mut to, &phone);
         assert_eq!((done.prefs, done.favorites, done.waiting, done.logins), (true, 1, 1, false));
+        assert_eq!((done.playlists, done.playlist_missing), (1, 1));
+        assert_eq!(to.playlists[0].name, "Mix");
+        assert_eq!(to.playlists[0].songs, vec!["/doc/y.flac".to_string()]);
         assert_eq!(to.favorites, vec!["/doc/y.flac".to_string()]); // the one on the same album
         assert_eq!(to.ui, serde_json::json!({ "compact": true, "accent": "#ff0000" }));
 

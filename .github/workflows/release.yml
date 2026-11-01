@@ -63,6 +63,7 @@ jobs:
             - **macOS**: `aarch64.dmg` for Apple Silicon (M1 and newer), `x64.dmg` for Intel Macs. The app isn't signed, so the first time, right-click it and choose **Open**, or run `xattr -cr /Applications/yuuricloud.app`.
             - **Linux**: `.AppImage` (any distro), `.deb` (Debian/Ubuntu) or `.rpm` (Fedora).
             - **iPhone and iPad**: `iOS-unsigned.ipa`. Install it with [AltStore](https://altstore.io) or [SideStore](https://sidestore.io), which sign it with your Apple ID. See the README for getting music and SoundCloud onto it.
+            - **Android**: `android.apk` (64-bit phones). Allow "Install unknown apps" for your browser or file manager, then open it.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -85,10 +86,18 @@ jobs:
     with:
       release: true
 
-  # Publish the release only once every platform has uploaded its files. A failed iOS build
+  # The Android .apk, attached the same way.
+  android:
+    needs: build
+    uses: ./.github/workflows/android.yml
+    secrets: inherit
+    with:
+      release: true
+
+  # Publish the release only once every platform has uploaded its files. A failed phone build
   # doesn't hold back the computer versions.
   publish:
-    needs: [build, ios]
+    needs: [build, ios, android]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:

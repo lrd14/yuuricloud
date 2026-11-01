@@ -1,6 +1,6 @@
 [package]
 name = "yuuricloud"
-version = "0.5.4"
+version = "0.6.0"
 description = "A small local music player"
 edition = "2021"
 
@@ -35,6 +35,10 @@ base64 = "0.22"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # The Soulseek client the iOS app has built in, since iOS can't run slskd.
 soulseek-rs-lib = "19.1"
+
+# The computer's side of "Let your phone connect" (share.rs).
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+tiny_http = "0.12"
 
 # Opens the app from the QR code a computer shows to sign this phone in to SoundCloud.
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]

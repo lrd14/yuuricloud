@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "yuuricloud",
+        "label": "main"
+      }
+    ]
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "scheme": ["yuuricloud"],
+          "appLink": false
+        }
+      ]
+    }
+  }
+}

@@ -32,6 +32,7 @@
           <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
         </button>
       </div>
+      <button id="remote-btn" class="icon-btn" title="Remote for your computer" hidden><svg viewBox="0 0 24 24"><use href="#i-devices" /></svg></button>
       <button id="downloads-btn" class="icon-btn dl-btn" title="Downloads">
         <svg viewBox="0 0 24 24"><use href="#i-download" /></svg>
         <span id="dl-badge" class="dl-badge" hidden></span>
@@ -55,14 +56,15 @@
     <section id="empty" class="empty" hidden>
       <svg viewBox="0 0 24 24"><use href="#i-note" /></svg>
       <p class="desktop-only">Your library is empty.<br />Add a folder with your music to get started. Songs you download from<br />SoundCloud or Soulseek show up here on their own.</p>
-      <p class="ios-only">Your library is empty.<br />Copy music into yuuricloud's folder: in the Files app it's under<br /><b>On My iPhone → yuuricloud</b>. From a computer, drag it onto yuuricloud<br />in the iPhone's Files tab in Finder (or the Apple Devices app on Windows).</p>
+      <p class="apple-only">Your library is empty.<br />Copy music into yuuricloud's folder: in the Files app it's under<br /><b>On My iPhone → yuuricloud</b>. From a computer, drag it onto yuuricloud<br />in the iPhone's Files tab in Finder (or the Apple Devices app on Windows).</p>
+      <p class="android-only">Your library is empty.<br />Connect the phone to a computer with a cable and copy music into<br /><b>Android/data/cloud.yuuri.player/files/Music</b>, or copy it over Wi-Fi<br />from yuuricloud on your computer (Settings → Integrations → Phone &amp; computer).</p>
       <button id="empty-add" class="btn accent desktop-only">Add music folder</button>
     </section>
 
     <section id="sc-empty" class="empty" hidden>
       <svg viewBox="0 0 24 24"><use href="#i-cloud" /></svg>
       <p class="desktop-only">Connect your SoundCloud account to play your likes and playlists here.</p>
-      <p class="ios-only">Connect your SoundCloud account to play your likes and playlists here.</p>
+      <p class="mobile-only">Connect your SoundCloud account to play your likes and playlists here.</p>
       <button id="sc-open-settings" class="btn accent">Set up SoundCloud</button>
     </section>
 
@@ -119,6 +121,63 @@
         <datalist id="ed-albums"></datalist>
       </section>
     </div>
+
+    <section id="np" class="np-page" hidden>
+      <div id="np-bg" class="np-bg"></div>
+      <button id="np-close" class="icon-btn np-close" title="Back (Esc)">
+        <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+      </button>
+      <div class="np-main">
+        <div id="np-cover" class="np-cover"></div>
+        <div class="np-info">
+          <div id="np-title" class="np-title"></div>
+          <div id="np-artist" class="np-artist"></div>
+          <div id="np-album" class="np-album"></div>
+        </div>
+      </div>
+      <div id="np-lyrics" class="np-lyrics"></div>
+    </section>
+
+    <section id="copy" class="lib-page copy-page" hidden>
+      <button id="copy-close" class="icon-btn page-close" title="Close"><svg viewBox="0 0 24 24"><use href="#i-close" /></svg></button>
+      <div class="page-kind">From your computer</div>
+      <h1 class="copy-title">Copy music</h1>
+      <p id="copy-note" class="hint"></p>
+      <div id="copy-list" class="copy-list"></div>
+      <footer class="copy-foot">
+        <label class="editor-check"><input id="copy-lists" type="checkbox" checked /> <span>Also bring the favourites and playlists</span></label>
+        <div id="copy-progress" class="dl-bar" hidden><i></i></div>
+        <div class="actions"><button id="copy-cancel" class="btn" hidden>Stop</button><button id="copy-go" class="btn accent">Copy</button></div>
+      </footer>
+    </section>
+
+    <section id="remote" class="np-page remote-page" hidden>
+      <div id="remote-bg" class="np-bg"></div>
+      <button id="remote-close" class="icon-btn np-close" title="Close"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg></button>
+      <div class="np-main">
+        <div class="page-kind" id="remote-from"></div>
+        <div id="remote-cover" class="np-cover"></div>
+        <div class="np-info">
+          <div id="remote-title" class="np-title"></div>
+          <div id="remote-artist" class="np-artist"></div>
+        </div>
+        <input id="remote-seek" class="range" type="range" min="0" max="0" step="1" value="0" />
+        <div class="remote-times"><span id="remote-pos">0:00</span><span id="remote-dur">0:00</span></div>
+        <div class="buttons">
+          <button class="icon-btn" data-remote="prev"><svg viewBox="0 0 24 24"><use href="#i-prev" /></svg></button>
+          <button class="play-btn" data-remote="toggle"><svg viewBox="0 0 24 24"><use id="remote-play-icon" href="#i-play" /></svg></button>
+          <button class="icon-btn" data-remote="next"><svg viewBox="0 0 24 24"><use href="#i-next" /></svg></button>
+        </div>
+        <div class="remote-volume"><svg viewBox="0 0 24 24"><use href="#i-volume" /></svg><input id="remote-volume" class="range" type="range" min="0" max="1" step="0.02" value="0.7" /></div>
+      </div>
+    </section>
+
+    <section id="page" class="lib-page" hidden>
+      <button id="page-close" class="icon-btn page-close" title="Close (Esc)">
+        <svg viewBox="0 0 24 24"><use id="page-back-icon" href="#i-close" /></svg>
+      </button>
+      <div id="page-body"></div>
+    </section>
 
     <section id="downloads" class="downloads-page" hidden>
       <header class="dl-head">
@@ -242,12 +301,25 @@
         </div>
       </div>
       <div class="volume">
+        <button id="np-btn" class="icon-btn toggle" title="Now playing and lyrics"><svg viewBox="0 0 24 24"><use href="#i-lyrics" /></svg></button>
         <button id="queue-btn" class="icon-btn toggle" title="Queue"><svg viewBox="0 0 24 24"><use href="#i-queue" /></svg></button>
         <button id="mute" class="icon-btn" title="Mute"><svg viewBox="0 0 24 24"><use id="vol-icon" href="#i-volume" /></svg></button>
         <input id="volume" class="range" type="range" min="0" max="1" step="0.01" value="0.7" />
       </div>
     </footer>
     <div id="status" class="status"></div>
+
+    <div id="ask" class="settings-backdrop" hidden>
+      <section class="settings ask" role="dialog" aria-labelledby="ask-title">
+        <h1 id="ask-title"></h1>
+        <p id="ask-text" class="hint"></p>
+        <input id="ask-input" type="text" spellcheck="false" autocomplete="off" maxlength="120" />
+        <footer class="ask-foot">
+          <button id="ask-cancel" class="btn">Cancel</button>
+          <button id="ask-ok" class="btn accent">OK</button>
+        </footer>
+      </section>
+    </div>
 
     <aside id="queue" class="queue-panel" hidden>
       <header class="queue-head">
@@ -278,6 +350,7 @@
           <button data-tab="motion">Animations</button>
           <button data-tab="library">Library</button>
           <button data-tab="playback">Playback</button>
+          <button data-tab="sound" class="desktop-only">Sound</button>
           <button data-tab="integrations">Integrations</button>
         </nav>
 
@@ -382,10 +455,15 @@
           <div class="tab" data-tab="library" hidden>
             <div class="label">Music folders</div>
             <div class="hint desktop-only">Your SoundCloud and Soulseek download folders are always included.</div>
-            <div class="hint ios-only">
+            <div class="hint apple-only">
               yuuricloud plays the music in its own folder. Copy songs into it in the Files app (On My iPhone →
               yuuricloud), or from a computer: drag them onto yuuricloud in the iPhone's Files tab in Finder, or in the
               Apple Devices app on Windows. New songs show up when you come back to the app.
+            </div>
+            <div class="hint android-only">
+              yuuricloud plays the music in its own folder: Android/data/cloud.yuuri.player/files/Music. Copy songs
+              into it from a computer over a cable, or over Wi-Fi from yuuricloud on your computer (Integrations →
+              Phone &amp; computer). New songs show up when you come back to the app.
             </div>
             <ul id="folder-list" class="folder-list"></ul>
             <button id="settings-add-folder" class="btn desktop-only">Add folder…</button>
@@ -405,6 +483,41 @@
               <div><div class="label">Full rescan</div><div class="hint">Re-read every file instead of only changed ones.</div></div>
               <button id="full-rescan" class="btn">Rescan everything</button>
             </div>
+          </div>
+
+          <div class="tab" data-tab="sound" hidden>
+            <div class="row">
+              <div>
+                <div class="label">Crossfade <span id="crossfade-value" class="hint"></span></div>
+                <div class="hint">Fade into the next song for this many seconds. At 0 the next song starts the moment one ends, with no gap.</div>
+              </div>
+              <input type="range" class="range pref-range" data-pref="crossfade" min="0" max="12" step="1" />
+            </div>
+            <div class="row">
+              <div>
+                <div class="label">Normalize volume</div>
+                <div class="hint">Turn loud songs down so everything plays at about the same volume. Each song is measured the first time it plays.</div>
+              </div>
+              <label class="switch"><input type="checkbox" data-pref="normalize" /><span></span></label>
+            </div>
+            <div class="row">
+              <div><div class="label">Equalizer</div><div class="hint">Shape the sound: pick a preset, or drag the bands.</div></div>
+              <div class="actions">
+                <select id="eq-preset" class="select">
+                  <option value="flat">Flat</option>
+                  <option value="bass">Bass boost</option>
+                  <option value="treble">Treble boost</option>
+                  <option value="vocal">Vocal</option>
+                  <option value="rock">Rock</option>
+                  <option value="electronic">Electronic</option>
+                  <option value="acoustic">Acoustic</option>
+                  <option value="loudness">Loudness</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <label class="switch"><input type="checkbox" data-pref="eq" /><span></span></label>
+              </div>
+            </div>
+            <div id="eq-bands" class="eq-bands"><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="0" /><span>32</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="1" /><span>64</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="2" /><span>125</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="3" /><span>250</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="4" /><span>500</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="5" /><span>1k</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="6" /><span>2k</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="7" /><span>4k</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="8" /><span>8k</span></label><label class="eq-band"><input type="range" class="range" min="-12" max="12" step="1" data-band="9" /><span>16k</span></label></div>
           </div>
 
           <div class="tab" data-tab="playback" hidden>
@@ -446,7 +559,7 @@
                   title and artist there, so they carry over even when the music is in other folders; songs that
                   aren't there yet become favourites once they are.
                 </div>
-                <div class="hint ios-only">Export saves the file in yuuricloud's folder in the Files app. To import, put a backup file there and tap Import.</div>
+                <div class="hint mobile-only">Export saves the file in yuuricloud's folder (see Library). To import, put a backup file there and tap Import.</div>
                 <label class="editor-check backup-logins">
                   <input id="backup-logins" type="checkbox" />
                   <span>Include logins and keys (Last.fm, Soulseek, Discord). Keep that file private. SoundCloud you sign in to on each device.</span>
@@ -474,6 +587,10 @@
                 <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
                 <span><span class="name">Soulseek</span><span class="state"></span></span>
               </button>
+              <button data-int="pc" data-status="pc-status">
+                <svg viewBox="0 0 24 24"><use href="#i-devices" /></svg>
+                <span><span class="name">Phone &amp; computer</span><span class="state"></span></span>
+              </button>
               <button data-int="lfm" data-status="lfm-status">
                 <svg viewBox="0 0 24 24"><use href="#i-bars" /></svg>
                 <span><span class="name">Last.fm</span><span class="state"></span></span>
@@ -490,9 +607,9 @@
                 Play your SoundCloud likes and playlists in the SoundCloud tab. Click <b>Connect</b> and sign in with
                 your SoundCloud account in the browser.
               </p>
-              <p class="hint ios-only">
+              <p class="hint mobile-only">
                 Play your SoundCloud likes and playlists in the SoundCloud tab. Tap <b>Connect</b> and sign in with your
-                SoundCloud account in Safari.
+                SoundCloud account in the browser.
               </p>
               <h4 class="group-title">Account</h4>
               <div class="group">
@@ -506,12 +623,12 @@
                 </div>
               </div>
 
-              <div class="ios-only">
+              <div class="mobile-only">
                 <h4 class="group-title">Or sign in from your computer</h4>
                 <div class="group">
                   <p class="hint phone-steps">
                     On your computer, open yuuricloud → Settings → Integrations → SoundCloud and click <b>Link phone…</b>.
-                    Then point this iPhone's camera at the code it shows and tap <b>Open in yuuricloud</b>. Or copy the
+                    Then point this phone's camera at the code it shows and tap <b>Open in yuuricloud</b>. Or copy the
                     code on the computer and paste it here.
                   </p>
                   <div class="fields">
@@ -527,7 +644,7 @@
                   <div class="row">
                     <div>
                       <div class="label">Use SoundCloud on your iPhone</div>
-                      <div id="sc-phone-status" class="hint">Sign in once more in the browser, then scan the code with the iPhone's camera. The phone gets a login of its own; this computer stays signed in.</div>
+                      <div id="sc-phone-status" class="hint">Sign in once more in the browser, then scan the code with the phone's camera. The phone gets a login of its own; this computer stays signed in.</div>
                     </div>
                     <div class="actions">
                       <button id="sc-phone" class="btn">Link phone…</button>
@@ -538,7 +655,7 @@
                     <img id="sc-phone-qr" alt="QR code that signs the phone in" />
                     <div>
                       <p class="hint">
-                        Point the iPhone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
+                        Point the phone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
                         it in yuuricloud on the phone, under Settings → Integrations → SoundCloud.
                       </p>
                       <p class="hint">Anyone with this code can use your SoundCloud account, so don't share it.</p>
@@ -608,9 +725,9 @@
 
             <!-- Soulseek -->
             <section class="int-panel" data-int="slsk" hidden>
-              <p class="hint ios-only">
+              <p class="hint mobile-only">
                 Search and download music from Soulseek in the Soulseek tab. Songs you download go into yuuricloud's
-                folder and show up in your library. iOS pauses apps in the background, so downloads only keep going
+                folder and show up in your library. Phones pause apps in the background, so downloads only keep going
                 while yuuricloud is open or playing music.
               </p>
               <p class="hint desktop-only">
@@ -673,7 +790,7 @@
                     <div>
                       <div class="label">Share my music library</div>
                       <div class="hint desktop-only">Your Soulseek download folder is always shared. Many Soulseek users won't send files to people who share nothing.</div>
-                      <div class="hint ios-only">Share all the music in yuuricloud's folder, not just your Soulseek downloads. Many Soulseek users won't send files to people who share nothing.</div>
+                      <div class="hint mobile-only">Share all the music in yuuricloud's folder, not just your Soulseek downloads. Many Soulseek users won't send files to people who share nothing.</div>
                     </div>
                     <label class="switch"><input id="slsk-share" type="checkbox" /><span></span></label>
                   </div>
@@ -704,6 +821,67 @@
                 Soulseek is a file-sharing network: much of what's on it is copyrighted, and what you download or share
                 is your responsibility.
               </p>
+            </section>
+
+            <!-- Phone & computer -->
+            <section class="int-panel" data-int="pc" hidden>
+              <div class="desktop-only">
+                <p class="hint">
+                  Copy music from this computer to yuuricloud on your iPhone over Wi-Fi, and use the phone as a remote
+                  for what's playing here. Both need to be on the same Wi-Fi.
+                </p>
+                <h4 class="group-title">Sharing</h4>
+                <div class="group">
+                  <div class="row">
+                    <div>
+                      <div class="label">Let your phone connect</div>
+                      <div id="pc-status" class="hint">Off</div>
+                    </div>
+                    <label class="switch"><input id="share-on" type="checkbox" /><span></span></label>
+                  </div>
+                  <div id="share-code" class="phone-code" hidden>
+                    <img id="share-qr" alt="QR code that pairs the phone" />
+                    <div>
+                      <p class="hint">
+                        Point the phone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
+                        it in yuuricloud on the phone, under Settings → Integrations → Phone &amp; computer.
+                      </p>
+                      <p class="hint">
+                        If the phone can't connect, allow yuuricloud on private networks when your computer asks, or in
+                        its firewall settings. A new code is made each time you turn this on.
+                      </p>
+                      <div class="actions"><button id="share-copy" class="btn">Copy code</button></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="mobile-only">
+                <p class="hint">
+                  Copy music from yuuricloud on your computer over Wi-Fi, and use this phone as a remote for it. Both
+                  need to be on the same Wi-Fi.
+                </p>
+                <h4 class="group-title">Computer</h4>
+                <div class="group">
+                  <div class="row">
+                    <div><div class="label">Paired computer</div><div id="pc-status-phone" class="hint">Not paired</div></div>
+                    <div class="actions"><button id="pc-unlink" class="btn danger" hidden>Unpair</button></div>
+                  </div>
+                  <div id="pc-pair">
+                    <p class="hint phone-steps">
+                      On your computer, open yuuricloud → Settings → Integrations → Phone &amp; computer and turn on
+                      <b>Let your phone connect</b>. Then point this phone's camera at the code it shows, or paste the code here.
+                    </p>
+                    <div class="fields">
+                      <label>Pairing code<input id="pc-code" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="yuuricloud://pair?…" /></label>
+                      <button id="pc-link" class="btn">Pair</button>
+                    </div>
+                  </div>
+                  <div id="pc-actions" class="row" hidden>
+                    <div><div class="label">Music and remote</div><div class="hint">Copy songs, favourites and playlists, or control what's playing there.</div></div>
+                    <div class="actions"><button id="pc-copy" class="btn">Copy music…</button><button id="pc-remote" class="btn">Remote</button></div>
+                  </div>
+                </div>
+              </div>
             </section>
 
             <!-- Last.fm -->
@@ -879,6 +1057,9 @@
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M5 20h14v-2H5zM19 9h-4V3H9v6H5l7 7z" /></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></symbol>
     <symbol id="i-to-top" viewBox="0 0 24 24"><path d="M5 4h14v2H5zm7 4-6 6h4v6h4v-6h4z" /></symbol>
+    <symbol id="i-devices" viewBox="0 0 24 24"><path d="M4 6h18V4H4a2 2 0 0 0-2 2v11H0v3h14v-3H4zm19 2h-6a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1zm-1 9h-4v-7h4z" /></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></symbol>
+    <symbol id="i-lyrics" viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2zm3 4v2h10V8zm0 4v2h7v-2z" /></symbol>
     <symbol id="i-random" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2.5 3a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm9 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM12 10.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM7.5 15a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm9 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" /></symbol>
     <symbol id="i-back" viewBox="0 0 24 24"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" /></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" /></symbol>

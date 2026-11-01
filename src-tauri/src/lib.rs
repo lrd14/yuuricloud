@@ -2,11 +2,15 @@
 //! `run` through the mobile entry point.
 
 mod backup;
+mod computer;
 mod cover_color;
 mod downloads;
 mod editor;
 mod integrations;
 mod library;
+mod lyrics;
+#[cfg(desktop)]
+mod share;
 mod slsk;
 mod slsk_native;
 mod soundcloud;
@@ -25,8 +29,25 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
+/// How often and when a song was played, for the smart lists.
+#[derive(Clone, Default, Serialize, serde::Deserialize)]
+struct PlayStat {
+    plays: u32,
+    /// unix time of the last play
+    last: i64,
+}
+
 struct AppState {
     data_dir: PathBuf,
+    /// song path -> plays, saved in stats.json
+    stats: Mutex<HashMap<String, PlayStat>>,
+    /// what's playing, as the frontend last reported it, for the phone's remote
+    remote: Mutex<serde_json::Value>,
+    /// "Let your phone connect", while it's on
+    #[cfg(desktop)]
+    share: Mutex<Option<share::Share>>,
+    /// set to stop copying songs from the computer
+    copy_cancel: AtomicBool,
     settings: Mutex<Settings>,
     tracks: Mutex<Vec<Track>>,
     scanning: AtomicBool,
@@ -351,6 +372,79 @@ fn set_favorite(state: State<AppState>, path: String, on: bool) -> Vec<String> {
     s.favorites.clone()
 }
 
+/// Save the playlists (the frontend owns their contents). Returns them as saved.
+#[tauri::command]
+fn set_playlists(state: State<AppState>, playlists: Vec<library::Playlist>) -> Vec<library::Playlist> {
+    let mut s = state.settings.lock().unwrap();
+    s.playlists = playlists;
+    state.save_settings(&s);
+    s.playlists.clone()
+}
+
+/// What Last.fm says about an artist (or an album, with `album`), for the artist and album pages.
+/// Cached for a week.
+#[tauri::command]
+async fn about(app: AppHandle, artist: String, album: Option<String>) -> Result<integrations::About, String> {
+    let state = app.state::<AppState>();
+    let cfg = state.settings.lock().unwrap().lastfm.clone();
+    let key = format!("{}\0{}", artist.to_lowercase(), album.as_deref().unwrap_or("").to_lowercase());
+    let file = state.data_dir.join("about").join(format!("{}.json", library::hash_hex(&key)));
+    blocking(move || {
+        let fresh = std::fs::metadata(&file).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default().as_secs() < 7 * 86_400);
+        if fresh {
+            if let Some(cached) = library::load_json(&file) {
+                return Ok(cached);
+            }
+        }
+        let info = match &album {
+            Some(album) => integrations::lastfm_album_info(&cfg, &artist, album)?,
+            None => integrations::lastfm_artist_info(&cfg, &artist)?,
+        };
+        let _ = std::fs::create_dir_all(file.parent().unwrap());
+        library::save_json(&file, &info);
+        Ok(info)
+    })
+    .await
+}
+
+/// Play counts and last plays for the smart lists.
+#[tauri::command]
+fn get_stats(state: State<AppState>) -> HashMap<String, PlayStat> {
+    state.stats.lock().unwrap().clone()
+}
+
+/// Count a play (the frontend calls this once a song has played long enough to scrobble).
+#[tauri::command]
+fn record_play(state: State<AppState>, path: String) -> PlayStat {
+    let mut stats = state.stats.lock().unwrap();
+    let stat = stats.entry(path).or_default();
+    stat.plays += 1;
+    stat.last = integrations::unix_now();
+    let stat = stat.clone();
+    library::save_json(&state.data_dir.join("stats.json"), &*stats);
+    stat
+}
+
+/// How much to turn a song down so songs sound equally loud (dB, 0 or less). Only songs in the
+/// library and SoundCloud songs in the stream cache are read.
+#[tauri::command]
+async fn loudness(app: AppHandle, path: String) -> Result<f32, String> {
+    let state = app.state::<AppState>();
+    let allowed = state.tracks.lock().unwrap().iter().any(|t| t.path == path) || Path::new(&path).starts_with(state.sc_stream_dir());
+    if !allowed {
+        return Err("Not a library song".into());
+    }
+    let cache = state.data_dir.join("loudness");
+    blocking(move || waveform::loudness_gain(Path::new(&path), &cache)).await
+}
+
+/// Lyrics for the playing song (see lyrics.rs).
+#[tauri::command]
+async fn lyrics(app: AppHandle, title: String, artist: String, album: String, duration: f64) -> Result<lyrics::Lyrics, String> {
+    let cache = app.state::<AppState>().data_dir.join("lyrics");
+    blocking(move || lyrics::get(&title, &artist, &album, duration, &cache)).await
+}
+
 /// Show a library song in the system file manager.
 #[tauri::command]
 fn reveal_file(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
@@ -524,6 +618,14 @@ fn open_links(app: &tauri::App) {
     use tauri_plugin_deep_link::DeepLinkExt;
     fn apply(app: &AppHandle, urls: Vec<tauri::Url>) {
         for url in urls.iter().filter(|u| u.scheme() == "yuuricloud") {
+            // the computer's pairing QR code
+            if url.host_str() == Some("pair") {
+                match pair_computer(&app.state::<AppState>(), url.as_str()) {
+                    Ok(settings) => drop(app.emit("computer-linked", settings)),
+                    Err(e) => drop(app.emit("sc-link-failed", e)),
+                }
+                continue;
+            }
             // SoundCloud's approval coming back for the sign-in `phone_sign_in` is waiting on
             if url.host_str() == Some("soundcloud-auth") {
                 let state = app.state::<AppState>();
@@ -627,21 +729,32 @@ fn download_folder(app: &AppHandle, cfg: &downloads::DownloadConfig) -> PathBuf 
 /// once they exist, or on iOS the app's own folder. Returned as (path, label).
 fn auto_folders(app: &AppHandle, s: &Settings) -> Vec<(PathBuf, &'static str)> {
     // iOS keeps Soulseek downloads inside the app's folder, so that one folder covers them
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     let all = {
         let _ = s;
-        [(phone_music_folder(app), "yuuricloud folder in the Files app")]
+        [(phone_music_folder(app), PHONE_FOLDER_LABEL)]
     };
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     let all = [(download_folder(app, &s.downloads), "SoundCloud downloads"), (slsk_download_folder(app, &s.soulseek), "Soulseek downloads")];
     all.into_iter().filter(|(p, _)| p.is_dir()).collect()
 }
 
-/// iOS: the app's Documents folder. The Files app shows it under On My iPhone → yuuricloud, and a
-/// computer can copy music into it through Finder or iTunes file sharing.
+/// Phones: the app's own music folder. On iOS that's its Documents folder, which the Files app
+/// shows under On My iPhone → yuuricloud and a computer can copy into through Finder or iTunes file
+/// sharing. On Android it's the app's Music folder (Android/data/cloud.yuuri.player/files/Music),
+/// which a computer sees over USB.
 #[cfg(target_os = "ios")]
+const PHONE_FOLDER_LABEL: &str = "yuuricloud folder in the Files app";
+#[cfg(target_os = "android")]
+const PHONE_FOLDER_LABEL: &str = "yuuricloud's Music folder";
+
+#[cfg(mobile)]
 fn phone_music_folder(app: &AppHandle) -> PathBuf {
-    app.path().document_dir().unwrap_or_default()
+    #[cfg(target_os = "ios")]
+    let dir = app.path().document_dir();
+    #[cfg(not(target_os = "ios"))]
+    let dir = app.path().audio_dir();
+    dir.unwrap_or_else(|_| app.state::<AppState>().data_dir.join("Music"))
 }
 
 /// Every folder a scan looks in: the user's folders plus the download folders, leaving out any
@@ -808,12 +921,12 @@ fn tool_cancel(state: State<AppState>) {
 /// Where Soulseek downloads go: the chosen folder, or Music/Soulseek. On iOS, a Soulseek folder in
 /// the app's own folder, so downloads are in the library and the Files app.
 fn slsk_download_folder(app: &AppHandle, cfg: &slsk::SlskConfig) -> PathBuf {
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     {
         let _ = cfg;
         phone_music_folder(app).join("Soulseek")
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     {
         if !cfg.folder.is_empty() {
             return PathBuf::from(&cfg.folder);
@@ -844,12 +957,12 @@ fn slsk_shares(settings: &Settings, downloads: &Path) -> Vec<String> {
 /// What the built-in Soulseek client shares. On iOS "share my library" means the app's whole
 /// folder, which the downloads are inside of.
 fn builtin_shares(app: &AppHandle, settings: &Settings, downloads: &Path) -> Vec<String> {
-    #[cfg(target_os = "ios")]
+    #[cfg(mobile)]
     {
         let folder = if settings.soulseek.share_library { phone_music_folder(app) } else { downloads.to_path_buf() };
         vec![folder.to_string_lossy().into_owned()]
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(desktop)]
     {
         let _ = app;
         slsk_shares(settings, downloads)
@@ -904,7 +1017,7 @@ async fn slsk_connect(app: AppHandle) -> Result<serde_json::Value, String> {
         let settings = state.settings.lock().unwrap().clone();
         let cfg = &settings.soulseek;
         // iOS can't run slskd, so the app is the Soulseek client itself there
-        let conn = if cfg!(target_os = "ios") || cfg.builtin {
+        let conn = if cfg!(mobile) || cfg.builtin {
             let downloads = slsk_download_folder(&app, cfg);
             slsk::connect_native(cfg, &downloads, &builtin_shares(&app, &settings, &downloads))?
         } else if cfg.external {
@@ -1040,6 +1153,189 @@ async fn slsk_pick_exe(app: AppHandle) -> Result<Option<String>, String> {
         return Ok(None);
     };
     Ok(Some(picked.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned()))
+}
+
+// ------------------------------------------------------ phone and computer
+
+#[derive(Serialize)]
+struct ShareInfo {
+    address: String,
+    /// `yuuricloud://pair?…`, to paste on the phone
+    link: String,
+    /// the same as a QR code, for the phone's camera
+    qr: String,
+}
+
+/// Computer: turn "Let your phone connect" on or off. Returns how to pair while it's on.
+#[tauri::command]
+fn share_set(app: AppHandle, on: bool) -> Result<Option<ShareInfo>, String> {
+    #[cfg(desktop)]
+    {
+        let state = app.state::<AppState>();
+        let mut share = state.share.lock().unwrap();
+        *share = None; // stops the old server first: it holds the port
+        if on {
+            *share = Some(share::start(&app)?);
+        }
+        Ok(share.as_ref().map(share_info))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, on);
+        Err("Phones can't share their music".into())
+    }
+}
+
+#[cfg(desktop)]
+fn share_info(s: &share::Share) -> ShareInfo {
+    let link = share::pair_link(s);
+    ShareInfo { address: s.address.clone(), qr: soundcloud::qr_svg(&link).unwrap_or_default(), link }
+}
+
+/// Computer: what's playing, for the phone's remote (the frontend reports it every second or so
+/// while sharing is on).
+#[tauri::command]
+fn remote_report(state: State<AppState>, mut now: serde_json::Value) {
+    // the phone gets a song's id (to ask for its cover), not where it is on this computer
+    if let Some(path) = now.get("path").and_then(|p| p.as_str()).map(String::from) {
+        now["id"] = serde_json::Value::String(if path.starts_with("sc:") { String::new() } else { share_id(&path) });
+        now.as_object_mut().map(|o| o.remove("path"));
+    }
+    *state.remote.lock().unwrap() = now;
+}
+
+#[cfg(desktop)]
+fn share_id(path: &str) -> String {
+    share::song_id(path)
+}
+#[cfg(mobile)]
+fn share_id(_: &str) -> String {
+    String::new()
+}
+
+/// Phone: pair with a computer, from its link code or QR code.
+#[tauri::command]
+async fn computer_link(app: AppHandle, code: String) -> Result<Settings, String> {
+    blocking(move || pair_computer(&app.state::<AppState>(), &code)).await
+}
+
+fn pair_computer(state: &AppState, code: &str) -> Result<Settings, String> {
+    let mut link = computer::from_link(code)?;
+    // check it answers, and take the name it gives
+    let hello = computer::get_json(&link, "/hello")?;
+    if let Some(name) = hello["name"].as_str() {
+        link.name = name.to_string();
+    }
+    let mut s = state.settings.lock().unwrap();
+    s.computer = link;
+    state.save_settings(&s);
+    Ok(s.clone())
+}
+
+#[tauri::command]
+fn computer_unlink(state: State<AppState>) -> Settings {
+    let mut s = state.settings.lock().unwrap();
+    s.computer = Default::default();
+    state.save_settings(&s);
+    s.clone()
+}
+
+fn computer_of(state: &AppState) -> computer::ComputerLink {
+    state.settings.lock().unwrap().computer.clone()
+}
+
+/// Phone: the computer's songs, favourites and playlists.
+#[tauri::command]
+async fn computer_library(app: AppHandle) -> Result<serde_json::Value, String> {
+    blocking(move || computer::get_json(&computer_of(&app.state::<AppState>()), "/library")).await
+}
+
+/// Where songs copied from the computer go.
+fn copied_folder(app: &AppHandle) -> PathBuf {
+    #[cfg(mobile)]
+    let root = phone_music_folder(app);
+    #[cfg(desktop)]
+    let root = app.path().audio_dir().unwrap_or_else(|_| app.state::<AppState>().data_dir.clone());
+    root.join("From computer")
+}
+
+#[derive(Serialize)]
+struct Copied {
+    copied: usize,
+    skipped: usize,
+    failed: usize,
+}
+
+/// Phone: copy songs from the computer, one at a time, saying how far along it is.
+#[tauri::command]
+async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>) -> Result<Copied, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.copy_cancel.store(false, Ordering::Relaxed);
+        let link = computer_of(&state);
+        let root = copied_folder(&app);
+        let total: u64 = songs.iter().map(|s| s.size).sum();
+        let (mut before, mut result) = (0u64, Copied { copied: 0, skipped: 0, failed: 0 });
+        let last = Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        for (i, song) in songs.iter().enumerate() {
+            let report = |done: u64| {
+                let mut last = last.lock().unwrap();
+                if last.elapsed().as_millis() >= 200 {
+                    *last = std::time::Instant::now();
+                    let _ = app.emit("copy-progress", serde_json::json!({ "song": i, "songs": songs.len(), "bytes": before + done, "total": total }));
+                }
+            };
+            match computer::copy(&link, song, &root, &state.copy_cancel, &report) {
+                Ok(true) => result.copied += 1,
+                Ok(false) => result.skipped += 1,
+                Err(e) if e == "Cancelled" => return Err(e),
+                Err(e) if result.copied == 0 && result.failed == 0 && i == 0 => return Err(e), // can't reach it at all
+                Err(_) => result.failed += 1,
+            }
+            before += song.size;
+        }
+        Ok(result)
+    })
+    .await
+}
+
+#[tauri::command]
+fn computer_cancel(state: State<AppState>) {
+    state.copy_cancel.store(true, Ordering::Relaxed);
+}
+
+/// Phone: take the computer's favourites and playlists (after copying songs and rescanning).
+#[tauri::command]
+async fn computer_lists(app: AppHandle) -> Result<ImportResult, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let link = computer_of(&state);
+        let parsed = backup::parse(&computer::get_json(&link, "/lists")?.to_string())?;
+        let tracks = state.tracks.lock().unwrap().clone();
+        let mut s = state.settings.lock().unwrap();
+        let imported = backup::apply(parsed, &mut s, &tracks);
+        state.save_settings(&s);
+        Ok(ImportResult { settings: s.clone(), imported, file: link.name.clone() })
+    })
+    .await
+}
+
+/// Phone: what the computer is playing.
+#[tauri::command]
+async fn computer_now(app: AppHandle) -> Result<serde_json::Value, String> {
+    blocking(move || computer::get_json(&computer_of(&app.state::<AppState>()), "/remote")).await
+}
+
+/// Phone: play/pause, next, previous, seek or volume on the computer.
+#[tauri::command]
+async fn computer_remote(app: AppHandle, command: String, value: Option<f64>) -> Result<(), String> {
+    blocking(move || computer::remote(&computer_of(&app.state::<AppState>()), &command, value)).await
+}
+
+/// Phone: a song's cover from the computer.
+#[tauri::command]
+async fn computer_cover(app: AppHandle, id: String) -> Result<String, String> {
+    blocking(move || computer::cover(&computer_of(&app.state::<AppState>()), &id)).await
 }
 
 // ---------------------------------------------------------------- backups
@@ -1307,7 +1603,7 @@ pub fn run() {
             let tracks: Vec<Track> = library::load_json(&data_dir.join("library.json")).unwrap_or_default();
 
             let handle = app.handle();
-            #[cfg(target_os = "ios")]
+            #[cfg(mobile)]
             let _ = std::fs::create_dir_all(phone_music_folder(handle));
             // the download folders too: their songs must play before the first scan has run
             for folder in library_roots(handle, &settings) {
@@ -1317,7 +1613,13 @@ pub fn run() {
             let _ = std::fs::create_dir_all(data_dir.join("soundcloud-cache"));
             allow_dir(handle, &data_dir.join("soundcloud-cache"));
 
+            let stats: HashMap<String, PlayStat> = library::load_json(&data_dir.join("stats.json")).unwrap_or_default();
             app.manage(AppState {
+                stats: Mutex::new(stats),
+                remote: Mutex::new(serde_json::Value::Null),
+                #[cfg(desktop)]
+                share: Mutex::new(None),
+                copy_cancel: AtomicBool::new(false),
                 data_dir,
                 settings: Mutex::new(settings),
                 tracks: Mutex::new(tracks),
@@ -1360,6 +1662,12 @@ pub fn run() {
             cover_accent,
             set_app_icon,
             set_favorite,
+            set_playlists,
+            get_stats,
+            about,
+            record_play,
+            loudness,
+            lyrics,
             reveal_file,
             sc_like,
             sc_download,
@@ -1389,6 +1697,17 @@ pub fn run() {
             save_song_tags,
             check_update,
             export_backup,
+            share_set,
+            remote_report,
+            computer_link,
+            computer_unlink,
+            computer_library,
+            computer_copy,
+            computer_cancel,
+            computer_lists,
+            computer_now,
+            computer_remote,
+            computer_cover,
             import_backup,
             tool_install,
             tool_cancel,

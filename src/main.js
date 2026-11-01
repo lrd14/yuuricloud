@@ -29,6 +29,8 @@ const state = {
   tracks: [],
   autoFolders: [], // download folders that are always scanned: [{ path, label }]
   favorites: new Set(), // paths of favourite library songs
+  stats: {}, // song path -> { plays, last }
+  playlists: [], // [{ id, name, songs: [paths] }]
   query: "",
   artist: null,   // artist key, null = all artists
   album: null,    // album key, null = every album of the artist
@@ -53,9 +55,20 @@ const state = {
   },
 };
 
-const audio = new Audio();
-audio.preload = "auto";
+// Two players: the song that's playing, and the next one loading in the other, so it can start
+// without a gap or fade in over the end of this one. `audio` is whichever is playing.
+const players = [new Audio(), new Audio()];
+for (const p of players) p.preload = "auto";
+let audio = players[0];
+const spare = () => (audio === players[0] ? players[1] : players[0]);
+/** Listen to the player that's playing (events from the other one are ignored). */
+function onAudio(type, fn) {
+  for (const p of players) p.addEventListener(type, (e) => e.target === audio && fn(e));
+}
 let baseVolume = 0.7; // the volume slider's value; fades move audio.volume around it
+/** "Normalize volume": how far this song is turned down (1 = not at all). */
+let trackGain = 1;
+const vol = () => baseVolume * trackGain;
 
 // ------------------------------------------------------------- preferences
 
@@ -67,6 +80,7 @@ const DEFAULT_PREFS = {
   waveHeight: 34, waveStyle: "bars", waveBars: 240, coverColors: true, coverTint: true,
   appIcon: "yuuri", scView: "list", onboarded: false, checkUpdates: true, skipVersion: "",
   ignoreThe: true, scanOnStart: true,
+  crossfade: 0, normalize: false, eq: false, eqPreset: "flat", eqCustom: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   singleClick: false, fade: true, rememberModes: false, shuffle: SHUFFLE_OFF, repeat: REPEAT_OFF, resume: true,
 };
 const COVER_SIZES = { small: "120px", medium: "156px", large: "200px" };
@@ -75,14 +89,21 @@ let prefs = { ...DEFAULT_PREFS };
 const appWindow = window.__TAURI__.window.getCurrentWindow();
 // iPads say they're Macs; only a touch screen tells them apart
 const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
-const platform = ios ? "ios" : /Mac/.test(navigator.userAgent) ? "mac" : /Linux/.test(navigator.userAgent) ? "linux" : "windows";
+const android = /Android/.test(navigator.userAgent);
+/** iPhones, iPads and Android: touch screens, the app's own music folder, no windows. */
+const phone = ios || android;
+const platform = ios ? "ios" : android ? "android" : /Mac/.test(navigator.userAgent) ? "mac" : /Linux/.test(navigator.userAgent) ? "linux" : "windows";
 document.body.classList.add(platform);
 document.documentElement.classList.add(platform);
+if (phone) {
+  document.body.classList.add("phone");
+  document.documentElement.classList.add("phone");
+}
 // The iPhone Duo's screens are nearly square, both folded and open; other iPhones are about 2:1
 const duo = /iPhone/.test(navigator.userAgent) && Math.max(screen.width, screen.height) / Math.min(screen.width, screen.height) < 1.7;
 document.body.classList.toggle("duo", duo);
 /** Touch screens play a song on the first tap; there's no double-click there. */
-const tapPlays = () => prefs.singleClick || ios;
+const tapPlays = () => prefs.singleClick || phone;
 /** iOS doesn't let pages change the volume, so there's nothing to fade. */
 const fades = () => prefs.fade && !ios;
 
@@ -90,8 +111,44 @@ const fades = () => prefs.fade && !ios;
 
 const artistKey = (t) => t.albumArtist.toLowerCase();
 const FAV_KEY = ":fav"; // the "Favourites" entry in the artist list
+const PL_PREFIX = ":pl:"; // playlists in the artist list: ":pl:<id>"
+const playlistOf = (key) => (key?.startsWith(PL_PREFIX) ? state.playlists.find((p) => PL_PREFIX + p.id === key) : null);
+const SMART_PREFIX = ":smart:"; // smart lists: ":smart:<id>"
+/** Favourites, playlists and smart lists: lists of songs rather than an artist. */
+const specialList = (key) => key === FAV_KEY || !!playlistOf(key) || !!smartOf(key);
+const plSets = new Map(); // playlist id -> Set of its song paths
+function plSet(p) {
+  if (!plSets.has(p.id)) plSets.set(p.id, new Set(p.songs));
+  return plSets.get(p.id);
+}
 const inArtist = (t) =>
-  state.artist === null || (state.artist === FAV_KEY ? state.favorites.has(t.path) : artistKey(t) === state.artist);
+  state.artist === null ||
+  (state.artist === FAV_KEY ? state.favorites.has(t.path)
+    : state.artist.startsWith(PL_PREFIX) ? !!playlistOf(state.artist) && plSet(playlistOf(state.artist)).has(t.path)
+    : state.artist.startsWith(SMART_PREFIX) ? smartSet(state.artist).has(t.path)
+    : artistKey(t) === state.artist);
+
+// Smart lists, made from how often and when songs were played (see record_play in lib.rs)
+const plays = (t) => state.stats?.[t.path]?.plays || 0;
+const lastPlayed = (t) => state.stats?.[t.path]?.last || 0;
+const SMART = [
+  { id: "added", name: "Recently added", list: (ts) => [...ts].sort((a, b) => b.mtime - a.mtime).slice(0, 100) },
+  { id: "most", name: "Most played", list: (ts) => ts.filter(plays).sort((a, b) => plays(b) - plays(a) || lastPlayed(b) - lastPlayed(a)).slice(0, 100) },
+  { id: "recent", name: "Recently played", list: (ts) => ts.filter(lastPlayed).sort((a, b) => lastPlayed(b) - lastPlayed(a)).slice(0, 100) },
+  { id: "never", name: "Never played", list: (ts) => ts.filter((t) => !plays(t)).sort(cmpTracks) },
+  { id: "forgotten", name: "Forgotten favourites", list: (ts) => ts.filter((t) => state.favorites.has(t.path) && Date.now() / 1000 - lastPlayed(t) > 60 * 86400).sort(cmpTracks) },
+];
+const smartOf = (key) => (key?.startsWith(SMART_PREFIX) ? SMART.find((x) => SMART_PREFIX + x.id === key) : null);
+const smartLists = new Map(); // key -> songs, for the current search; cleared on every redraw
+function smartList(key) {
+  if (!smartLists.has(key)) smartLists.set(key, smartOf(key)?.list(state.visible) || []);
+  return smartLists.get(key);
+}
+const smartSets = new Map();
+function smartSet(key) {
+  if (!smartSets.has(key)) smartSets.set(key, new Set(smartList(key).map((t) => t.path)));
+  return smartSets.get(key);
+}
 /** Favourite (library) or liked (SoundCloud). */
 const isFav = (t) => (t.sc ? state.sc.liked.has(t.urn) : state.favorites.has(t.path));
 const albumKey = (t) => artistKey(t) + "\0" + t.album.toLowerCase();
@@ -172,6 +229,8 @@ async function load() {
   state.settings = snap.settings;
   state.tracks = snap.tracks;
   state.favorites = new Set(snap.settings.favorites || []);
+  state.playlists = snap.settings.playlists || [];
+  state.stats = (await invoke("get_stats").catch(() => null)) || {};
   const linuxDefaults = platform === "linux" ? { blur: false, tint: 0.96 } : {}; // no compositor blur there
   prefs = { ...DEFAULT_PREFS, ...linuxDefaults, ...(snap.settings.ui || {}) };
   applyPrefs();
@@ -179,7 +238,8 @@ async function load() {
     setShuffle(shuffleMode(prefs.shuffle));
     setRepeat(prefs.repeat);
   }
-  baseVolume = audio.volume = state.settings.volume;
+  baseVolume = state.settings.volume;
+  audio.volume = vol();
   el.volume.value = baseVolume;
   setRangeFill(el.volume);
   el.preferTags.checked = state.settings.preferTags;
@@ -196,7 +256,7 @@ async function load() {
   if (hasFolders && (prefs.scanOnStart || !state.tracks.length || needThumbs)) rescan(false);
   if (prefs.checkUpdates) checkForUpdate();
   // first start: walk through setting things up
-  if (!ios && !prefs.onboarded && !state.settings.folders.length && !state.tracks.length) openOnboarding();
+  if (!phone && !prefs.onboarded && !state.settings.folders.length && !state.tracks.length) openOnboarding();
 }
 
 /** `quiet`: a check in the background, which only speaks up (and redraws) when something changed. */
@@ -304,6 +364,8 @@ function applySearch() {
 }
 
 function renderArtists() {
+  smartLists.clear();
+  smartSets.clear();
   const artists = new Map(); // key -> { name, albums }
   for (const t of state.visible) {
     const k = artistKey(t);
@@ -311,16 +373,23 @@ function renderArtists() {
     artists.get(k).albums.add(albumKey(t));
   }
   const favCount = state.visible.filter((t) => state.favorites.has(t.path)).length;
-  if (state.artist === FAV_KEY ? !favCount : state.artist !== null && !artists.has(state.artist)) state.artist = null;
+  if (state.artist === FAV_KEY ? !favCount : state.artist !== null && !artists.has(state.artist) && !playlistOf(state.artist) && !smartOf(state.artist)) state.artist = null;
   const keys = [...artists.keys()].sort((a, b) => cmpName(artists.get(a).name, artists.get(b).name));
 
   let n = 0;
   const item = (key, name, count) =>
     `<li data-key="${esc(key ?? "")}" class="${key === state.artist ? "sel" : ""}" title="${esc(name)}" style="--i:${n++}">` +
     `<span class="count">${count}</span>${esc(name)}</li>`;
+  const group = (name) => `<li class="group" style="--i:${n++}">${esc(name)}</li>`;
+  const lists = state.playlists.map((p) => item(PL_PREFIX + p.id, p.name, state.visible.filter((t) => plSet(p).has(t.path)).length)).join("");
   el.artistList.innerHTML =
     item(null, "All artists", new Set(state.visible.map(albumKey)).size) +
     (favCount ? item(FAV_KEY, "♥ Favourites", favCount) : "") +
+    group("Smart lists") +
+    SMART.map((x) => [x, smartList(SMART_PREFIX + x.id).length]).filter(([x, count]) => count || x.id === "added")
+      .map(([x, count]) => item(SMART_PREFIX + x.id, x.name, count)).join("") +
+    group("Playlists") + lists + `<li class="new-playlist" data-new-playlist style="--i:${n++}">＋ New playlist</li>` +
+    group("Artists") +
     keys.map((k) => item(k, artists.get(k).name, artists.get(k).albums.size)).join("");
   if (state.artist === null) el.artistList.firstElementChild?.classList.add("sel");
   el.artistsTitle.textContent = `Artists · ${keys.length}`;
@@ -340,7 +409,7 @@ function renderAlbums() {
   }
   if (state.album !== null && !groups.has(state.album)) state.album = null;
 
-  const oneArtist = state.artist !== null && state.artist !== FAV_KEY;
+  const oneArtist = state.artist !== null && !specialList(state.artist);
   const keys = [...groups.keys()].sort((a, b) => {
     const x = groups.get(a), y = groups.get(b);
     return (!oneArtist ? cmpName(x.artist, y.artist) : 0) ||
@@ -362,22 +431,35 @@ function renderAlbums() {
   renderSongs();
 }
 
+/** Library order: artist, album (by year), disc, track. */
+const cmpTracks = (a, b) =>
+  cmpName(a.albumArtist, b.albumArtist) || cmpYear(a.year, b.year) ||
+  collator.compare(sortName(a.album), sortName(b.album)) ||
+  a.discNo - b.discNo || a.trackNo - b.trackNo || collator.compare(a.title, b.title);
+
 function renderSongs() {
   const tracks = state.visible.filter((t) =>
     inArtist(t) &&
     (state.album === null || albumKey(t) === state.album));
-  tracks.sort((a, b) =>
-    cmpName(a.albumArtist, b.albumArtist) || cmpYear(a.year, b.year) ||
-    collator.compare(sortName(a.album), sortName(b.album)) ||
-    a.discNo - b.discNo || a.trackNo - b.trackNo || collator.compare(a.title, b.title));
+  const pl = state.album === null ? playlistOf(state.artist) : null;
+  const smart = state.album === null ? smartOf(state.artist) : null;
+  if (pl || smart) {
+    // playlists and smart lists play in their own order
+    const order = pl ? pl.songs : smartList(state.artist).map((t) => t.path);
+    const at = new Map(order.map((p, i) => [p, i]));
+    tracks.sort((a, b) => at.get(a.path) - at.get(b.path));
+  } else {
+    tracks.sort(cmpTracks);
+  }
   const multiDisc = state.album !== null && new Set(tracks.map((t) => t.discNo)).size > 1;
   // phones leave out the artist column when it would say the same thing on every row
-  el.songTable.classList.toggle("one-artist", state.artist !== null && state.artist !== FAV_KEY);
-  fillSongs(tracks, { multiDisc, hideAlbum: state.album !== null, title: "Songs" });
+  el.songTable.classList.toggle("one-artist", state.artist !== null && !specialList(state.artist));
+  fillSongs(tracks, { multiDisc, hideAlbum: state.album !== null, title: pl?.name || smart?.name || "Songs", numbered: !!(pl || smart) });
 }
 
 /** Put `tracks` in the song table. Shared by the library and SoundCloud views. */
-function fillSongs(tracks, { multiDisc = false, hideAlbum = false, title = "Songs" } = {}) {
+function fillSongs(tracks, { multiDisc = false, hideAlbum = false, title = "Songs", numbered = false } = {}) {
+  songTable.numbered = numbered;
   state.shown = tracks;
   state.selected = -1;
   const playing = current()?.path;
@@ -398,14 +480,14 @@ const EQ_HTML = '<span class="eq"><i></i><i></i><i></i></span>';
 
 // The song table only holds the rows in view plus a margin, with spacer rows standing in for
 // the rest. Thousands of real rows made every click, search and scroll in the window slow.
-const songTable = { rowH: 0, start: 0, end: 0, multiDisc: false };
+const songTable = { rowH: 0, start: 0, end: 0, multiDisc: false, numbered: false };
 const ROW_MARGIN = 24; // rows drawn above and below the visible ones
 const ROW_STEP = 16; // redraw only after scrolling this many rows
 const tableWrap = () => el.songBody.closest(".table-wrap");
 
 function songRowHtml(t, i, playing) {
   if (t.group) return slskGroupHtml(t, i);
-  const num = t.slsk ? t.num : t.sc ? i + 1 : songTable.multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || "";
+  const num = t.slsk ? t.num : t.sc || songTable.numbered ? i + 1 : songTable.multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || "";
   const isPlaying = t.path === playing;
   const cls = [isPlaying && "playing", i === state.selected && "sel", t.access === "blocked" && "unplayable", isFav(t) && "fav"].filter(Boolean).join(" ");
   const badge = t.access === "preview" ? '<span class="badge" title="SoundCloud only allows a 30-second preview">PREVIEW</span>'
@@ -523,7 +605,12 @@ function playShown(index) {
     slskDownload(pick.group ? pick.all : [pick]); // not on this computer yet: double-click downloads
     return;
   }
-  state.queue = [...state.shown];
+  playTracks(state.shown, index);
+}
+
+/** Play `tracks` from song `index`, in the current shuffle mode. */
+function playTracks(tracks, index) {
+  state.queue = [...tracks];
   state.order = state.queue.map((_, i) => i);
   if (state.shuffle === SHUFFLE_RANDOM) {
     state.order = [index];
@@ -561,12 +648,22 @@ function fillRandom() {
 function playCurrent(autoplay = true) {
   const t = current();
   if (!t) return;
-  if (t.sc) {
-    loadScAudio(t, autoplay);
+  if (pre.path === t.path && !spare().error) {
+    scLoadId++;
+    handOff(autoplay);
   } else {
-    scLoadId++; // drop a SoundCloud download still on its way
-    audio.src = convertFileSrc(t.path);
-    if (autoplay) startPlayback();
+    xfade.pending = false;
+    spare().pause(); // a song still fading out, or one loaded ahead for something else
+    pre.path = null;
+    trackGain = 1;
+    if (t.sc) {
+      loadScAudio(t, autoplay);
+    } else {
+      scLoadId++; // drop a SoundCloud download still on its way
+      setSrc(audio, t.path);
+      measureGain(t, t.path);
+      if (autoplay) startPlayback();
+    }
   }
   el.nowTitle.textContent = t.title;
   el.nowArtist.textContent = t.album ? `${t.artist} — ${t.album}` : t.artist;
@@ -585,6 +682,7 @@ function playCurrent(autoplay = true) {
   $("locate").hidden = false;
   renderNowFav();
   renderQueue();
+  renderNowPlaying();
   saveSession();
 }
 
@@ -621,21 +719,21 @@ function fadeTo(target, ms) {
 
 // If the window gets hidden mid-fade, finish the fade at once instead of waiting on throttled timers.
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden || audio.paused || audio.volume === baseVolume) return;
+  if (!document.hidden || audio.paused || audio.volume === vol()) return;
   fadeId++;
   if (pausing) {
     pausing = false;
     audio.pause();
   }
-  audio.volume = baseVolume;
+  audio.volume = vol();
 });
 
 function startPlayback() {
   fadeId++;
-  audio.volume = fades() ? 0 : baseVolume;
+  audio.volume = fades() ? 0 : vol();
   audio.play()
-    .then(() => fades() && fadeTo(baseVolume, 300))
-    .catch(() => (audio.volume = baseVolume));
+    .then(() => fades() && fadeTo(vol(), 300))
+    .catch(() => (audio.volume = vol()));
 }
 
 let pausing = false;
@@ -645,7 +743,7 @@ async function pausePlayback() {
   pausing = false;
   if (!faded) return; // cancelled by a play in the meantime
   audio.pause();
-  audio.volume = baseVolume;
+  audio.volume = vol();
 }
 
 function togglePlay() {
@@ -736,41 +834,217 @@ if ("mediaSession" in navigator) {
   ms.setActionHandler("nexttrack", () => next());
 }
 
+// ------------------------------------------------- gapless, crossfade, volume
+
+/** Load a song file into a player. With the equalizer on, the player must ask for it the way the
+ * audio engine is allowed to read it. */
+function setSrc(p, file) {
+  if (graph) p.crossOrigin = "anonymous";
+  else p.removeAttribute("crossorigin");
+  p.src = convertFileSrc(file);
+}
+
+/** The song after this one, if one follows by itself. */
+function upcoming() {
+  if (state.repeat === REPEAT_ONE) return null;
+  if (state.pos + 1 < state.order.length) return state.queue[state.order[state.pos + 1]];
+  // repeating the list in order starts over; a shuffled one is reshuffled first, so it can't be known
+  return state.repeat === REPEAT_ALL && !state.shuffle ? state.queue[state.order[0]] : null;
+}
+
+const pre = { path: null, gain: 1 }; // the next song, loaded in the spare player
+let preloading = null;
+async function preloadNext() {
+  const n = upcoming();
+  if (!n || n.access === "blocked" || pre.path === n.path || preloading === n.path) return;
+  preloading = n.path;
+  try {
+    const file = n.sc ? await invoke("sc_prepare", { urn: n.urn }) : n.path;
+    const gain = await gainOf(file);
+    if (upcoming()?.path !== n.path || xfade.pending) return; // the queue changed meanwhile
+    const p = spare();
+    p.pause();
+    setSrc(p, file);
+    p.load();
+    Object.assign(pre, { path: n.path, gain });
+  } catch {} finally {
+    preloading = null;
+  }
+}
+
+const crossfadeSecs = () => (ios ? 0 : Math.max(0, Number(prefs.crossfade) || 0));
+const xfade = { pending: false };
+
+/** Near the end of a song: load the next one, and start fading into it when crossfading. */
+function lookAhead() {
+  if (audio.paused || !audio.duration) return;
+  const left = audio.duration - audio.currentTime, xf = crossfadeSecs();
+  if (left < Math.max(20, xf + 10)) preloadNext();
+  if (xf > 0 && left <= xf && !xfade.pending && pre.path && pre.path === upcoming()?.path && spare().readyState >= 2) {
+    xfade.pending = true;
+    xfade.ms = left * 1000;
+    scrob.track = null;
+    next(true);
+  }
+}
+
+/** Switch to the song loaded in the spare player: right away, or fading over the old one. */
+function handOff(autoplay) {
+  const old = audio;
+  audio = spare();
+  pre.path = null;
+  trackGain = pre.gain;
+  setMuted(old.muted);
+  showDuration();
+  if (xfade.pending) {
+    xfade.pending = false;
+    fadeOut(old, xfade.ms);
+    audio.currentTime = 0;
+    audio.volume = 0;
+    audio.play().catch(() => {});
+    fadeTo(vol(), xfade.ms);
+    return;
+  }
+  old.pause();
+  if (!autoplay) return;
+  fadeId++;
+  audio.currentTime = 0;
+  audio.volume = vol();
+  audio.play().catch(() => {});
+}
+
+/** Fade a player that's no longer the current one out, then stop it. */
+function fadeOut(p, ms) {
+  const from = p.volume, start = performance.now();
+  const step = () => {
+    if (p === audio) return; // it was picked again
+    const k = Math.min(1, (performance.now() - start) / ms);
+    p.volume = from * (1 - k);
+    if (k < 1 && !p.paused) setTimeout(step, 30);
+    else p.pause();
+  };
+  step();
+}
+
+const gains = new Map(); // file -> volume factor
+/** How far "Normalize volume" turns a song down (1 when it's off or can't tell). */
+async function gainOf(file) {
+  if (!prefs.normalize || ios) return 1;
+  if (!gains.has(file)) gains.set(file, await invoke("loudness", { path: file }).then((db) => 10 ** (db / 20), () => 1));
+  return gains.get(file);
+}
+async function measureGain(t, file) {
+  const g = await gainOf(file);
+  if (current() !== t || g === trackGain) return;
+  trackGain = g;
+  if (!xfade.pending) fadeTo(vol(), 400);
+}
+
+// The equalizer runs the players through the browser's audio engine. That only starts once it's
+// turned on, so with it off nothing about playback changes.
+const EQ_BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+const EQ_PRESETS = {
+  flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  bass: [6, 5, 4, 2, 0, 0, 0, 0, 0, 0],
+  treble: [0, 0, 0, 0, 0, 1, 2, 4, 5, 6],
+  vocal: [-2, -2, -1, 1, 3, 3, 2, 1, 0, -1],
+  rock: [4, 3, 2, 0, -1, -1, 1, 2, 3, 4],
+  electronic: [5, 4, 1, 0, -2, 1, 0, 1, 4, 5],
+  acoustic: [3, 3, 2, 1, 1, 1, 2, 2, 2, 1],
+  loudness: [5, 4, 2, 0, -1, 0, 0, 2, 4, 5],
+};
+let graph = null, graphTrying = false;
+const eqGains = () => (prefs.eqPreset === "custom" && Array.isArray(prefs.eqCustom) ? prefs.eqCustom : EQ_PRESETS[prefs.eqPreset] || EQ_PRESETS.flat);
+
+async function startEqualizer() {
+  if (graph || graphTrying || phone) return;
+  const src = audio.getAttribute("src");
+  if (!src) return; // tried again when a song loads
+  graphTrying = true;
+  // the audio engine may only read songs the player was allowed to fetch; check that works here first
+  const stop = new AbortController();
+  const ok = await fetch(src, { signal: stop.signal }).then((r) => r.ok, () => false);
+  stop.abort(); // the headers were all it needed
+  graphTrying = false;
+  if (!ok) {
+    setPref("eq", false);
+    setStatus("The equalizer can't be used on this system", 6000);
+    return;
+  }
+  const ctx = new AudioContext();
+  const filters = EQ_BANDS.map((f, i) => {
+    const b = ctx.createBiquadFilter();
+    b.type = i === 0 ? "lowshelf" : i === EQ_BANDS.length - 1 ? "highshelf" : "peaking";
+    b.frequency.value = f;
+    b.Q.value = 1.1;
+    return b;
+  });
+  filters.reduce((a, b) => (a.connect(b), b)).connect(ctx.destination);
+  graph = { ctx, filters };
+  for (const p of players) {
+    // reload with the audio engine's permission, keeping the place and whether it was playing
+    const was = p.getAttribute("src");
+    p.crossOrigin = "anonymous";
+    if (was) {
+      const at = p.currentTime, playing = !p.paused;
+      p.src = was;
+      p.addEventListener("loadedmetadata", () => {
+        p.currentTime = at;
+        if (playing) p.play().catch(() => {});
+      }, { once: true });
+    }
+    ctx.createMediaElementSource(p).connect(filters[0]);
+  }
+  applyEq();
+}
+function applyEq() {
+  if (prefs.eq && !graph) startEqualizer();
+  if (!graph) return;
+  const g = prefs.eq ? eqGains() : EQ_PRESETS.flat;
+  graph.filters.forEach((f, i) => (f.gain.value = g[i] || 0));
+}
+onAudio("play", () => {
+  graph?.ctx.resume();
+  if (prefs.eq && !graph) startEqualizer();
+});
+
 // ------------------------------------------------------------------ events
 
-audio.addEventListener("play", () => {
+onAudio("play", () => {
   el.playIcon.setAttribute("href", "#i-pause");
   document.body.classList.remove("paused");
   if (scrob.track !== current()) beginScrobble(current());
   discordSync();
 });
-audio.addEventListener("pause", () => {
+onAudio("pause", () => {
   el.playIcon.setAttribute("href", "#i-play");
   document.body.classList.add("paused");
   discordSync();
   saveSession();
 });
-audio.addEventListener("seeked", () => {
+onAudio("seeked", () => {
   scrob.lastTime = audio.currentTime;
   discordSync();
 });
-audio.addEventListener("ended", () => {
+onAudio("ended", () => {
   scrob.track = null; // so a repeated song scrobbles again
   next(true);
 });
-audio.addEventListener("loadedmetadata", () => {
+function showDuration() {
   el.seek.max = audio.duration || 0;
   el.dur.textContent = fmtTime(audio.duration);
-});
+}
+onAudio("loadedmetadata", showDuration);
 let seeking = false;
-audio.addEventListener("timeupdate", () => {
+onAudio("timeupdate", () => {
   trackListening();
+  lookAhead();
   if (seeking) return;
   el.seek.value = audio.currentTime;
   el.pos.textContent = fmtTime(audio.currentTime);
   setRangeFill(el.seek);
 });
-audio.addEventListener("error", () => {
+onAudio("error", () => {
   if (!audio.getAttribute("src")) return; // cleared while a SoundCloud song downloads
   const t = current();
   // a song the scan couldn't read any length from is almost always an empty or cut-off file,
@@ -922,23 +1196,25 @@ seekWrap.addEventListener("mouseleave", () => {
   wave.hover = -1;
   kickWave();
 });
-audio.addEventListener("play", kickWave);
-audio.addEventListener("seeked", kickWave);
-audio.addEventListener("loadedmetadata", kickWave);
+onAudio("play", kickWave);
+onAudio("seeked", kickWave);
+onAudio("loadedmetadata", kickWave);
 window.addEventListener("resize", kickWave);
 
 let volumeSave;
 el.volume.addEventListener("input", () => {
   fadeId++; // cancel any running fade
-  baseVolume = audio.volume = Number(el.volume.value);
-  audio.muted = false;
+  baseVolume = Number(el.volume.value);
+  audio.volume = vol();
+  setMuted(false);
   setRangeFill(el.volume);
   clearTimeout(volumeSave);
-  volumeSave = setTimeout(() => invoke("set_volume", { volume: audio.volume }), 400);
+  volumeSave = setTimeout(() => invoke("set_volume", { volume: baseVolume }), 400);
 });
-audio.addEventListener("volumechange", () =>
+onAudio("volumechange", () =>
   el.volIcon.setAttribute("href", audio.muted || audio.volume === 0 ? "#i-mute" : "#i-volume"));
-$("mute").addEventListener("click", () => (audio.muted = !audio.muted));
+const setMuted = (on) => players.forEach((p) => (p.muted = on));
+$("mute").addEventListener("click", () => setMuted(!audio.muted));
 
 el.play.addEventListener("click", togglePlay);
 $("next").addEventListener("click", () => next());
@@ -985,11 +1261,12 @@ el.artistList.addEventListener("click", (e) => {
     if (li.dataset.key) slskSelect(li.dataset.key);
     return;
   }
+  if (li.dataset.newPlaylist !== undefined) return newPlaylist();
   state.artist = li.dataset.key || null;
   state.album = null;
   for (const x of el.artistList.children) x.classList.toggle("sel", x === li);
   renderAlbums();
-  showPane("albums");
+  showPane(playlistOf(state.artist) || smartOf(state.artist) ? "songs" : "albums");
 });
 el.artistList.addEventListener("dblclick", (e) => e.target.closest("li") && state.source !== "slsk" && playShown(0));
 
@@ -1115,7 +1392,7 @@ async function syncMaximized() {
   $("win-max-icon").setAttribute("d", max ? "M3.5 1.5h7v7M1.5 3.5h7v7h-7z" : "M2 2h8v8H2z");
   $("win-max").title = max ? "Restore" : "Maximize";
 }
-if (!ios) {
+if (!phone) {
   appWindow.onResized(syncMaximized);
   syncMaximized();
 }
@@ -1205,6 +1482,8 @@ function trackListening() {
   const needed = Math.min((t.duration || audio.duration || 0) / 2, 240);
   if (!scrob.done && (t.duration || audio.duration) > 30 && scrob.listened >= needed) {
     scrob.done = true;
+    // counts toward the smart lists, for library songs
+    if (!t.sc) invoke("record_play", { path: t.path }).then((stat) => (state.stats[t.path] = stat), () => {});
     if (lastfmEnabled()) {
       invoke("lastfm_scrobble", { track: trackInfo(t), startedAt: scrob.startedAt })
         .catch((e) => setStatus(String(e), 5000));
@@ -1260,6 +1539,7 @@ function renderIntegrations() {
   renderScSettings();
   renderDownloadSettings();
   renderSlskSettings();
+  renderPcSettings();
 }
 
 function fillIntegrationFields() {
@@ -1390,7 +1670,7 @@ el.nowArtist.addEventListener("click", () => jumpToCurrent(false));
 const APP_ICONS = ["yuuri", "cloud"];
 let appliedIcon = null;
 function applyAppIcon() {
-  if (ios) return; // the home screen icon is fixed
+  if (phone) return; // the home screen icon is fixed
   const name = APP_ICONS.includes(prefs.appIcon) ? prefs.appIcon : APP_ICONS[0];
   if (name === appliedIcon) return;
   appliedIcon = name;
@@ -1423,17 +1703,49 @@ function applyPrefs() {
   root.setProperty("--wave-h", `${prefs.waveHeight}px`);
   if (prefs.waveform && current() && (wave.path !== current().path || wave.bins !== waveBars())) loadWaveform(current());
   else kickWave();
-  if (platform !== "linux" && !ios && blurApplied !== prefs.blur) {
+  if (platform !== "linux" && !phone && blurApplied !== prefs.blur) {
     blurApplied = prefs.blur;
     const done = prefs.blur
       ? appWindow.setEffects({ effects: ["acrylic", "underWindowBackground"], radius: 16 })
       : appWindow.clearEffects();
     done.catch(() => {});
   }
-  if (!ios) appWindow.setAlwaysOnTop(prefs.onTop).catch(() => {});
+  if (!phone) appWindow.setAlwaysOnTop(prefs.onTop).catch(() => {});
   highlightPlaying();
+  applyEq();
+  if (normalizeShown !== prefs.normalize) {
+    normalizeShown = prefs.normalize;
+    const t = current();
+    if (t && !t.sc) measureGain(t, t.path);
+  }
   if (!el.settings.hidden) syncSettingsUI();
 }
+
+let normalizeShown = null;
+
+/** Settings → Sound: the equalizer's preset and bands. */
+function syncSoundUI() {
+  const xf = crossfadeSecs();
+  $("crossfade-value").textContent = xf ? `· ${xf} s` : "· off (no gap)";
+  $("eq-preset").value = prefs.eqPreset in EQ_PRESETS || prefs.eqPreset === "custom" ? prefs.eqPreset : "flat";
+  const g = eqGains();
+  for (const b of document.querySelectorAll("#eq-bands input")) {
+    b.value = g[b.dataset.band] || 0;
+    setRangeFill(b);
+  }
+  $("eq-bands").classList.toggle("off", !prefs.eq);
+}
+$("eq-preset").addEventListener("change", (e) => setPref("eqPreset", e.target.value));
+$("eq-bands").addEventListener("input", (e) => {
+  const b = e.target.closest("input[data-band]");
+  if (!b) return;
+  // dragging a band starts a custom curve from the one shown
+  const custom = [...eqGains()];
+  custom[b.dataset.band] = Number(b.value);
+  prefs.eqCustom = custom;
+  if (!prefs.eq) prefs.eq = true;
+  setPref("eqPreset", "custom");
+});
 
 function syncSettingsUI() {
   for (const input of el.settings.querySelectorAll("input[data-pref]")) {
@@ -1445,6 +1757,7 @@ function syncSettingsUI() {
       setRangeFill(input);
     }
   }
+  syncSoundUI();
   for (const group of el.settings.querySelectorAll(".segmented[data-pref]")) {
     for (const b of group.children) b.classList.toggle("on", b.dataset.value === String(prefs[group.dataset.pref]));
   }
@@ -1530,7 +1843,7 @@ function backupStatus(text, ok = true) {
 $("backup-export").addEventListener("click", async () => {
   try {
     const file = await invoke("export_backup", { includeLogins: $("backup-logins").checked });
-    if (file) backupStatus(`Saved to ${ios ? `yuuricloud's folder as “${baseName(file)}”` : file}`);
+    if (file) backupStatus(`Saved to ${phone ? `yuuricloud's folder as “${baseName(file)}”` : file}`);
   } catch (e) {
     backupStatus(String(e), false);
   }
@@ -1545,6 +1858,8 @@ $("backup-import").addEventListener("click", async () => {
   if (!r) return;
   state.settings = r.settings;
   state.favorites = new Set(r.settings.favorites || []);
+  state.playlists = r.settings.playlists || [];
+  plSets.clear();
   const linuxDefaults = platform === "linux" ? { blur: false, tint: 0.96 } : {};
   prefs = { ...DEFAULT_PREFS, ...linuxDefaults, ...(r.settings.ui || {}) };
   applyPrefs();
@@ -1552,8 +1867,10 @@ $("backup-import").addEventListener("click", async () => {
   renderNowFav();
   fillIntegrationFields();
   const i = r.imported;
-  const parts = [i.prefs && "settings", `${i.favorites} favourite${i.favorites === 1 ? "" : "s"}`, i.logins && "logins"].filter(Boolean);
-  backupStatus(`Imported ${parts.join(", ")} from “${r.file}”` + (i.waiting ? `. ${i.waiting} more become favourites once those songs are in your library.` : "."));
+  const parts = [i.prefs && "settings", `${i.favorites} favourite${i.favorites === 1 ? "" : "s"}`,
+    i.playlists && `${i.playlists} playlist${i.playlists === 1 ? "" : "s"}`, i.logins && "logins"].filter(Boolean);
+  backupStatus(`Imported ${parts.join(", ")} from “${r.file}”` + (i.waiting ? `. ${i.waiting} more become favourites once those songs are in your library.` : ".") +
+    (i.playlistMissing ? ` ${i.playlistMissing} playlist song${i.playlistMissing === 1 ? " isn't" : "s aren't"} in this library.` : ""));
 });
 listen("favorites-changed", ({ payload }) => {
   state.favorites = new Set(payload);
@@ -1765,7 +2082,8 @@ async function loadScAudio(t, autoplay) {
   try {
     const file = await invoke("sc_prepare", { urn: t.urn });
     if (id !== scLoadId) return; // another song was picked meanwhile
-    audio.src = convertFileSrc(file);
+    setSrc(audio, file);
+    measureGain(t, file);
     setStatus("", 0);
     if (autoplay) startPlayback();
     prefetchNext();
@@ -1798,9 +2116,9 @@ function renderScSettings() {
   const status = $("sc-status");
   status.className = "hint" + (connected ? " ok" : "");
   status.textContent = connected ? `Connected as ${sc.username}${ownKeys ? " (your own app)" : ""}`
-    : scWaiting ? (ios ? "Approve access in Safari, then come back here…" : "Approve access in the browser window that opened…")
+    : scWaiting ? (phone ? "Approve access in the browser, then come back here…" : "Approve access in the browser window that opened…")
     : ownKeys ? "Not connected — using your own app" : scBuiltin ? "Not connected" : "Add your Client ID and Client Secret below first.";
-  if (!scBuiltin && !ownKeys && !ios) $("sc-own").open = true;
+  if (!scBuiltin && !ownKeys && !phone) $("sc-own").open = true;
   $("sc-connect").hidden = connected || scWaiting;
   $("sc-connect").disabled = !ownKeys && !scBuiltin;
   $("sc-cancel").hidden = !scWaiting;
@@ -1914,7 +2232,7 @@ listen("sc-link-failed", ({ payload }) => setStatus(String(payload), 6000));
 
 /** Phones show one panel at a time: artists (or SoundCloud lists), then albums, then songs. */
 const phoneQuery = matchMedia("(max-width: 599px), (max-width: 700px) and (max-height: 540px)"); // same as style.css
-const phoneLayout = () => ios && phoneQuery.matches;
+const phoneLayout = () => phone && phoneQuery.matches;
 function showPane(pane) {
   document.body.dataset.pane = pane;
 }
@@ -1928,7 +2246,7 @@ $("albums-all").addEventListener("click", () => {
   showPane("songs");
 });
 
-if (ios) {
+if (phone) {
   // Music copied in with the Files app or Finder shows up when you come back to the app.
   document.addEventListener("visibilitychange", () => !document.hidden && sessionReady && rescan(false, true));
 
@@ -1975,7 +2293,7 @@ document.documentElement.appendChild(ctx);
  */
 let appliedScale = 1;
 function applyInterfaceSize() {
-  if (ios) return; // pinch-free fixed size; the system text size applies instead
+  if (phone) return; // pinch-free fixed size; the system text size applies instead
   const scale = Number(prefs.scale) || 1;
   if (scale === appliedScale) return;
   appliedScale = scale;
@@ -2021,7 +2339,7 @@ function songMenu(t, i) {
       { label: "Open in browser", icon: "i-globe", disabled: !t.permalinkUrl, action: () => window.__TAURI__.opener.openUrl(t.permalinkUrl.split("?")[0]) },
       { label: "Copy link", icon: "i-link", disabled: !t.permalinkUrl, action: () => copyText(t.permalinkUrl.split("?")[0], "Link copied") },
     );
-    if (!ios) {
+    if (!phone) {
       items.push(
         "-",
         canDownload(t)
@@ -2034,10 +2352,20 @@ function songMenu(t, i) {
     const fav = state.favorites.has(t.path);
     items.push(
       { label: fav ? "Remove from favourites" : "Add to favourites", icon: fav ? "i-heart" : "i-heart-outline", on: fav, action: () => toggleFavorite(t) },
-      ...(ios ? [] : [{ label: "Open file location", icon: "i-folder", action: () => invoke("reveal_file", { path: t.path }).catch((e) => setStatus(String(e), 5000)) }]),
+      ...(phone ? [] : [{ label: "Open file location", icon: "i-folder", action: () => invoke("reveal_file", { path: t.path }).catch((e) => setStatus(String(e), 5000)) }]),
       "-",
-      { label: "Edit song info…", icon: "i-edit", action: () => openEditor(t) },
+      ...playlistMenu([t]),
     );
+    const pl = playlistOf(state.artist);
+    if (pl && state.album === null) {
+      const at = pl.songs.indexOf(t.path);
+      items.push(
+        { label: `Remove from “${pl.name}”`, icon: "i-stop", action: () => removeFromPlaylist(pl, t) },
+        { label: "Move up", icon: "i-to-top", disabled: at <= 0, action: () => movePlaylistSong(pl, at, at - 1) },
+        { label: "Move down", icon: "i-to-top", disabled: at < 0 || at >= pl.songs.length - 1, action: () => movePlaylistSong(pl, at, at + 1) },
+      );
+    }
+    items.push("-", { label: "Edit song info…", icon: "i-edit", action: () => openEditor(t) });
   }
   return items;
 }
@@ -2071,6 +2399,666 @@ function playNext(t) {
   saveSession();
 }
 
+// ---------------------------------------------------------------- playlists
+
+/** Ask for a name (or a yes) in a small dialog. Resolves to the text, true, or null if cancelled. */
+function ask({ title, text = "", value = null, ok = "OK", danger = false }) {
+  const box = $("ask");
+  $("ask-title").textContent = title;
+  $("ask-text").textContent = text;
+  $("ask-text").hidden = !text;
+  const input = $("ask-input");
+  input.hidden = value === null;
+  input.value = value ?? "";
+  $("ask-ok").textContent = ok;
+  $("ask-ok").classList.toggle("danger-accent", danger);
+  box.hidden = false;
+  setTimeout(() => (value === null ? $("ask-ok") : input).focus({ preventScroll: true }), 30);
+  if (value !== null) input.select();
+  return new Promise((resolve) => {
+    const done = (answer) => {
+      box.hidden = true;
+      $("ask-ok").onclick = $("ask-cancel").onclick = input.onkeydown = box.onmousedown = null;
+      resolve(answer);
+    };
+    $("ask-ok").onclick = () => (value === null ? done(true) : input.value.trim() && done(input.value.trim()));
+    $("ask-cancel").onclick = () => done(null);
+    input.onkeydown = (e) => {
+      if (e.key === "Enter" && input.value.trim()) done(input.value.trim());
+      if (e.key === "Escape") done(null);
+    };
+    box.onmousedown = (e) => e.target === box && done(null);
+  });
+}
+
+async function savePlaylists() {
+  state.playlists = await invoke("set_playlists", { playlists: state.playlists });
+  plSets.clear();
+  if (state.source !== "local") return;
+  const scroll = [el.artistList.scrollTop, tableWrap().scrollTop];
+  renderArtists();
+  [el.artistList.scrollTop, tableWrap().scrollTop] = scroll;
+}
+
+/** "Add to …" items for a song menu (or an album's or artist's): one per playlist, and a new one. */
+function playlistMenu(tracks) {
+  const local = tracks.filter((t) => !t.sc && !t.slsk);
+  if (!local.length) return [];
+  const all = (p) => local.every((t) => plSet(p).has(t.path));
+  return [
+    ...state.playlists.map((p) => ({ label: `Add to “${p.name}”`, icon: "i-list", disabled: all(p), action: () => addToPlaylist(p, local) })),
+    { label: "New playlist…", icon: "i-queue", action: () => newPlaylist(local) },
+  ];
+}
+
+async function newPlaylist(tracks = []) {
+  const name = await ask({ title: "New playlist", value: "", ok: "Create" });
+  if (!name) return;
+  const p = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, songs: [] };
+  state.playlists.push(p);
+  if (tracks.length) await addToPlaylist(p, tracks, false);
+  else await savePlaylists();
+  setStatus(`Made the playlist “${name}”`, 2500);
+}
+
+async function addToPlaylist(p, tracks, say = true) {
+  const have = plSet(p);
+  const added = tracks.filter((t) => !have.has(t.path));
+  p.songs.push(...added.map((t) => t.path));
+  await savePlaylists();
+  if (say) setStatus(added.length === 1 ? `Added “${added[0].title}” to “${p.name}”` : `Added ${added.length} songs to “${p.name}”`, 2500);
+}
+
+async function removeFromPlaylist(p, t) {
+  p.songs = p.songs.filter((x) => x !== t.path);
+  await savePlaylists();
+  setStatus(`Removed “${t.title}” from “${p.name}”`, 2500);
+}
+
+async function movePlaylistSong(p, from, to) {
+  const [song] = p.songs.splice(from, 1);
+  p.songs.splice(to, 0, song);
+  await savePlaylists();
+  const i = state.shown.findIndex((t) => t.path === song);
+  if (i >= 0) selectRow(i);
+}
+
+async function renamePlaylist(p) {
+  const name = await ask({ title: "Rename playlist", value: p.name, ok: "Rename" });
+  if (!name) return;
+  p.name = name;
+  await savePlaylists();
+}
+
+async function deletePlaylist(p) {
+  if (!(await ask({ title: `Delete “${p.name}”?`, text: "The songs stay in your library.", ok: "Delete", danger: true }))) return;
+  state.playlists = state.playlists.filter((x) => x !== p);
+  if (state.artist === PL_PREFIX + p.id) state.artist = null;
+  await savePlaylists();
+}
+
+/** The library songs of an album (by its index in the grid), in album order. */
+const albumTracks = (i) => state.visible.filter((t) => albumKey(t) === state.albumKeys[i]).sort(cmpTracks);
+
+// right-click (hold on a phone) an album
+el.albumGrid.addEventListener("contextmenu", (e) => {
+  const card = e.target.closest(".album[data-i]");
+  if (!card || state.source !== "local") return;
+  e.preventDefault();
+  const tracks = albumTracks(Number(card.dataset.i));
+  if (!tracks.length) return;
+  openMenu(e.clientX, e.clientY, tracks[0].album, [
+    { label: "Play", icon: "i-play", action: () => {
+      state.album = state.albumKeys[card.dataset.i];
+      renderSongs();
+      showPane("songs");
+      playShown(0);
+    } },
+    { label: "Play next", icon: "i-queue", action: () => [...tracks].reverse().forEach((t) => playNext(t)) },
+    { label: "Album page", icon: "i-grid", action: () => openPage("album", state.albumKeys[card.dataset.i]) },
+    "-",
+    ...playlistMenu(tracks),
+  ]);
+});
+
+// right-click (hold) an artist or a playlist in the list on the left
+el.artistList.addEventListener("contextmenu", (e) => {
+  if (state.source !== "local") return;
+  const li = e.target.closest("li[data-key]");
+  if (!li || !li.dataset.key) return;
+  e.preventDefault();
+  const key = li.dataset.key;
+  const songs = () => smartOf(key) ? [...smartList(key)] : state.visible.filter((t) => key === FAV_KEY ? state.favorites.has(t.path) : playlistOf(key) ? plSet(playlistOf(key)).has(t.path) : artistKey(t) === key).sort(cmpTracks);
+  const play = { label: "Play", icon: "i-play", action: () => {
+    li.click();
+    showPane("songs");
+    playShown(0);
+  } };
+  const p = playlistOf(key);
+  openMenu(e.clientX, e.clientY, li.title, p
+    ? [play, "-", { label: "Rename…", icon: "i-edit", action: () => renamePlaylist(p) }, { label: "Delete playlist…", icon: "i-stop", action: () => deletePlaylist(p) }]
+    : [play, ...(specialList(key) ? [] : [{ label: "Artist page", icon: "i-note", action: () => openPage("artist", key) }]), "-", ...playlistMenu(songs())]);
+});
+
+// ------------------------------------------------------ phone & computer
+
+// Computer: "Let your phone connect" (share.rs), and reporting what's playing for the remote
+let share = null; // { address, link, qr } while it's on
+let shareTimer = null;
+function renderPcSettings() {
+  const pc = state.settings.computer || {};
+  const status = $("pc-status");
+  if (phone) {
+    status.textContent = pc.address ? `Paired with ${pc.name}` : "Not paired";
+    status.className = "hint" + (pc.address ? " ok" : "");
+    $("pc-status-phone").textContent = pc.address ? `${pc.name} · ${pc.address}` : "Not paired";
+    $("pc-status-phone").className = status.className;
+    $("pc-unlink").hidden = !pc.address;
+    $("pc-pair").hidden = !!pc.address;
+    $("pc-actions").hidden = !pc.address;
+    $("remote-btn").hidden = !pc.address;
+    document.body.classList.toggle("paired", !!pc.address);
+    return;
+  }
+  status.textContent = share ? `On · ${share.address}` : "Off";
+  status.className = "hint" + (share ? " ok" : "");
+  $("share-on").checked = !!share;
+  $("share-code").hidden = !share;
+  if (share) $("share-qr").src = share.qr;
+}
+$("share-on").addEventListener("change", async (e) => {
+  try {
+    share = await invoke("share_set", { on: e.target.checked });
+  } catch (err) {
+    share = null;
+    setStatus(String(err), 6000);
+  }
+  clearInterval(shareTimer);
+  if (share) {
+    reportNow();
+    shareTimer = setInterval(reportNow, 1000);
+  }
+  renderIntegrations();
+});
+$("share-copy").addEventListener("click", () => share && copyText(share.link, "Code copied — paste it in yuuricloud on your phone"));
+function reportNow() {
+  const t = current();
+  invoke("remote_report", { now: t ? {
+    path: t.path, title: t.title, artist: t.artist, album: t.album || "", cover: t.sc ? t.cover : "",
+    playing: !audio.paused, position: audio.currentTime || 0, duration: audio.duration || t.duration || 0, volume: baseVolume,
+  } : {} }).catch(() => {});
+}
+listen("remote-command", ({ payload: { command, value } }) => {
+  if (command === "toggle") togglePlay();
+  if (command === "next") next();
+  if (command === "prev") prev();
+  if (command === "seek" && value != null && current()) audio.currentTime = value;
+  if (command === "volume" && value != null) {
+    baseVolume = Math.min(1, Math.max(0, value));
+    el.volume.value = baseVolume;
+    setRangeFill(el.volume);
+    fadeId++;
+    audio.volume = vol();
+    invoke("set_volume", { volume: baseVolume });
+  }
+  setTimeout(reportNow, 150);
+});
+
+// Phone: pairing
+async function pairComputer(code) {
+  try {
+    state.settings = await invoke("computer_link", { code });
+    $("pc-code").value = "";
+    setStatus(`Paired with ${state.settings.computer.name}`, 3000);
+  } catch (e) {
+    $("pc-status-phone").className = "hint err";
+    $("pc-status-phone").textContent = String(e);
+    return;
+  }
+  renderIntegrations();
+}
+$("pc-link").addEventListener("click", () => pairComputer($("pc-code").value));
+$("pc-unlink").addEventListener("click", async () => {
+  state.settings = await invoke("computer_unlink");
+  renderIntegrations();
+});
+listen("computer-linked", ({ payload }) => {
+  state.settings = payload;
+  setStatus(`Paired with ${payload.computer.name}`, 3000);
+  renderIntegrations();
+});
+
+// Phone: copying music from the computer
+const copy = { library: null, picks: new Map(), busy: false }; // picks: key -> songs
+const fmtSize = (n) => fmtBytes(n);
+function showCopy(open) {
+  $("copy").hidden = !open;
+  document.body.classList.toggle("show-page", open);
+  if (open) loadCopyList();
+}
+$("pc-copy").addEventListener("click", () => {
+  closeSettings();
+  showCopy(true);
+});
+$("copy-close").addEventListener("click", () => !copy.busy && showCopy(false));
+
+async function loadCopyList() {
+  copy.picks.clear();
+  $("copy-list").innerHTML = "";
+  $("copy-note").textContent = `Looking at ${state.settings.computer.name}…`;
+  try {
+    copy.library = await invoke("computer_library");
+  } catch (e) {
+    $("copy-note").textContent = String(e);
+    return;
+  }
+  const lib = copy.library, byId = new Map(lib.songs.map((t) => [t.id, t]));
+  const ids = (list) => list.map((id) => byId.get(id)).filter(Boolean);
+  const albums = new Map();
+  for (const t of lib.songs) {
+    const k = `${t.albumArtist}\0${t.album}`;
+    if (!albums.has(k)) albums.set(k, []);
+    albums.get(k).push(t);
+  }
+  copy.groups = [
+    ...(lib.favorites.length ? [{ key: "fav", name: "♥ Favourites", songs: ids(lib.favorites) }] : []),
+    ...lib.playlists.map((p, i) => ({ key: `pl${i}`, name: p.name, songs: ids(p.songs) })),
+    ...[...albums.entries()].sort(([a], [b]) => collator.compare(a, b)).map(([k, songs], i) => ({ key: `al${i}`, name: songs[0].album, sub: songs[0].albumArtist, songs, album: true })),
+  ];
+  const row = (g) => `<label class="copy-row"><input type="checkbox" data-key="${g.key}" /><span class="copy-name">${esc(g.name)}${g.sub ? `<span class="hint"> · ${esc(g.sub)}</span>` : ""}</span>` +
+    `<span class="hint">${countOf(g.songs.length, "song")} · ${fmtSize(g.songs.reduce((n, t) => n + t.size, 0))}</span></label>`;
+  const lists = copy.groups.filter((g) => !g.album), albumRows = copy.groups.filter((g) => g.album);
+  $("copy-list").innerHTML = (lists.length ? `<h2 class="page-section">Favourites and playlists</h2>${lists.map(row).join("")}` : "") +
+    `<h2 class="page-section">Albums</h2>${albumRows.map(row).join("")}`;
+  renderCopyTotal();
+}
+function chosenSongs() {
+  const seen = new Map();
+  for (const g of copy.groups || []) if (copy.picks.has(g.key)) for (const t of g.songs) seen.set(t.id, t);
+  return [...seen.values()];
+}
+function renderCopyTotal() {
+  const songs = chosenSongs();
+  $("copy-note").textContent = songs.length
+    ? `${countOf(songs.length, "song")} · ${fmtSize(songs.reduce((n, t) => n + t.size, 0))}. Songs already on this phone are skipped.`
+    : `Pick what to copy from ${state.settings.computer.name}.`;
+  $("copy-go").disabled = !songs.length && !$("copy-lists").checked;
+}
+$("copy-list").addEventListener("change", (e) => {
+  const key = e.target.dataset.key;
+  if (!key) return;
+  e.target.checked ? copy.picks.set(key, true) : copy.picks.delete(key);
+  renderCopyTotal();
+});
+$("copy-lists").addEventListener("change", renderCopyTotal);
+$("copy-go").addEventListener("click", async () => {
+  const songs = chosenSongs();
+  copy.busy = true;
+  $("copy-go").disabled = true;
+  $("copy-cancel").hidden = false;
+  $("copy-progress").hidden = false;
+  let summary = "";
+  try {
+    if (songs.length) {
+      const r = await invoke("computer_copy", { songs });
+      summary = `Copied ${countOf(r.copied, "song")}` + (r.skipped ? `, ${r.skipped} already here` : "") + (r.failed ? `, ${r.failed} failed` : "");
+      await refreshAutoFolders();
+      await rescan(false);
+    }
+    if ($("copy-lists").checked) {
+      const r = await invoke("computer_lists");
+      state.settings = r.settings;
+      state.favorites = new Set(r.settings.favorites || []);
+      state.playlists = r.settings.playlists || [];
+      plSets.clear();
+      applySearch();
+      summary += `${summary ? ". " : ""}Brought ${countOf(r.imported.favorites, "favourite")} and ${countOf(r.imported.playlists, "playlist")}`;
+    }
+    $("copy-note").textContent = summary + ".";
+  } catch (e) {
+    $("copy-note").textContent = String(e) === "Cancelled" ? "Stopped." : String(e);
+  } finally {
+    copy.busy = false;
+    $("copy-cancel").hidden = true;
+    $("copy-progress").hidden = true;
+    $("copy-go").disabled = false;
+  }
+});
+$("copy-cancel").addEventListener("click", () => invoke("computer_cancel"));
+listen("copy-progress", ({ payload: p }) => {
+  $("copy-progress").firstElementChild.style.width = `${(p.bytes / Math.max(1, p.total)) * 100}%`;
+  $("copy-note").textContent = `Copying song ${p.song + 1} of ${p.songs} · ${fmtSize(p.bytes)} of ${fmtSize(p.total)}`;
+});
+
+// Phone: the remote
+let remoteTimer = null, remoteCover = { id: null, url: "" }, remoteSeeking = false;
+function showRemote(open) {
+  $("remote").hidden = !open;
+  document.body.classList.toggle("show-page", open);
+  clearInterval(remoteTimer);
+  if (open) {
+    $("remote-from").textContent = state.settings.computer.name;
+    pollRemote();
+    remoteTimer = setInterval(pollRemote, 1000);
+  }
+}
+$("pc-remote").addEventListener("click", () => {
+  closeSettings();
+  showRemote(true);
+});
+$("remote-btn").addEventListener("click", () => showRemote($("remote").hidden));
+$("remote-close").addEventListener("click", () => showRemote(false));
+async function pollRemote() {
+  let now;
+  try {
+    now = await invoke("computer_now");
+  } catch (e) {
+    $("remote-title").textContent = "Can't reach the computer";
+    $("remote-artist").textContent = String(e);
+    return;
+  }
+  $("remote-title").textContent = now.title || "Nothing playing";
+  $("remote-artist").textContent = [now.artist, now.album].filter(Boolean).join(" — ");
+  $("remote-play-icon").setAttribute("href", now.playing ? "#i-pause" : "#i-play");
+  if (!remoteSeeking) {
+    $("remote-seek").max = Math.round(now.duration || 0);
+    $("remote-seek").value = Math.round(now.position || 0);
+    setRangeFill($("remote-seek"));
+  }
+  $("remote-pos").textContent = fmtTime(now.position);
+  $("remote-dur").textContent = fmtTime(now.duration);
+  if (document.activeElement !== $("remote-volume")) {
+    $("remote-volume").value = now.volume ?? 0.7;
+    setRangeFill($("remote-volume"));
+  }
+  // the cover: SoundCloud artwork as it is, a library song's from the computer
+  const key = now.cover || now.id || "";
+  if (key !== remoteCover.id) {
+    remoteCover = { id: key, url: now.cover || "" };
+    if (!now.cover && now.id) remoteCover.url = await invoke("computer_cover", { id: now.id }).catch(() => "");
+    $("remote-cover").innerHTML = coverHtml(remoteCover.url, now.album || now.title || "");
+    $("remote-bg").innerHTML = remoteCover.url ? `<img src="${esc(remoteCover.url)}" alt="">` : "";
+  }
+}
+$("remote").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-remote]");
+  if (!b) return;
+  await invoke("computer_remote", { command: b.dataset.remote, value: null }).catch((err) => setStatus(String(err), 4000));
+  setTimeout(pollRemote, 200);
+});
+$("remote-seek").addEventListener("input", () => {
+  remoteSeeking = true;
+  setRangeFill($("remote-seek"));
+});
+$("remote-seek").addEventListener("change", async () => {
+  await invoke("computer_remote", { command: "seek", value: Number($("remote-seek").value) }).catch(() => {});
+  remoteSeeking = false;
+});
+$("remote-volume").addEventListener("change", () => invoke("computer_remote", { command: "volume", value: Number($("remote-volume").value) }).catch(() => {}));
+
+// ------------------------------------------------------ artist & album pages
+
+const pageStack = []; // [{ kind: "artist" | "album", key }], the last one shown
+const pageOpen = () => !$("page").hidden;
+function showPage(open) {
+  $("page").hidden = !open;
+  document.body.classList.toggle("show-page", open);
+  if (!open) pageStack.length = 0;
+}
+function openPage(kind, key) {
+  if (npOpen()) showNowPlaying(false);
+  showDownloads(false);
+  closeSettings();
+  if (state.source !== "local") setSource("local");
+  pageStack.push({ kind, key });
+  showPage(true);
+  renderPage();
+}
+function pageBack() {
+  pageStack.pop();
+  if (pageStack.length) renderPage();
+  else showPage(false);
+}
+$("page-close").addEventListener("click", pageBack);
+document.addEventListener("keydown", (e) => e.key === "Escape" && pageOpen() && $("settings").hidden && $("ask").hidden && pageBack());
+$("source").addEventListener("click", () => showPage(false), true);
+
+const totalTime = (ts) => fmtTime(ts.reduce((s, t) => s + (t.duration || 0), 0));
+const countOf = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function pageSongRow(t, i, number) {
+  const playing = current()?.path === t.path;
+  return `<div class="page-song${playing ? " playing" : ""}" data-i="${i}"><span class="n">${playing && prefs.equalizer ? EQ_HTML : number}</span>` +
+    `<span class="t">${esc(t.title)}${isFav(t) ? '<svg class="heart" style="display:inline-block"><use href="#i-heart" /></svg>' : ""}</span>` +
+    `<span class="a">${esc(t.artist)}</span><span class="d">${fmtTime(t.duration)}</span></div>`;
+}
+
+function renderPage() {
+  const top = pageStack[pageStack.length - 1];
+  if (!top) return;
+  $("page-close").title = pageStack.length > 1 ? "Back (Esc)" : "Close (Esc)";
+  $("page-back-icon").setAttribute("href", pageStack.length > 1 ? "#i-back" : "#i-close");
+  if (top.kind === "artist") renderArtistPage(top.key);
+  else renderAlbumPage(top.key);
+  $("page").scrollTop = 0;
+}
+
+let pageSongs = []; // the songs listed on the page, for clicks
+let pageAlbums = []; // the album keys in the page's grid
+
+function renderArtistPage(key) {
+  const tracks = state.tracks.filter((t) => artistKey(t) === key).sort(cmpTracks);
+  if (!tracks.length) return pageBack();
+  const name = tracks[0].albumArtist;
+  const groups = new Map();
+  for (const t of tracks) {
+    const k = albumKey(t);
+    if (!groups.has(k)) groups.set(k, { album: t.album, year: t.year, cover: thumbOf(t), count: 0 });
+    const g = groups.get(k);
+    g.count++;
+    g.cover ||= thumbOf(t);
+    g.year ||= t.year;
+  }
+  pageAlbums = [...groups.keys()].sort((a, b) => cmpYear(groups.get(b).year, groups.get(a).year)); // newest first
+  const played = tracks.filter(plays);
+  const top = (played.length ? [...played].sort((a, b) => plays(b) - plays(a)) : tracks).slice(0, 5);
+  pageSongs = top;
+  const playsTotal = tracks.reduce((s, t) => s + plays(t), 0);
+  const hero = groups.get(pageAlbums[0])?.cover;
+  $("page-body").innerHTML =
+    `<header class="page-head">${coverHtml(hero, name).replace('class="cover"', 'class="cover page-art round"')}` +
+    `<div class="page-title"><div class="page-kind">Artist</div><h1>${esc(name)}</h1>` +
+    `<div class="hint">${[countOf(groups.size, "album"), countOf(tracks.length, "song"), totalTime(tracks), playsTotal && countOf(playsTotal, "play")].filter(Boolean).join(" · ")}</div>` +
+    `<div class="page-actions"><button class="btn accent" data-act="play">Play</button><button class="btn" data-act="shuffle">Shuffle</button></div>` +
+    `<div id="page-tags" class="page-tags"></div></div></header>` +
+    `<p id="page-about" class="page-about"></p>` +
+    `<h2 class="page-section">${played.length ? "Most played" : "Songs"}</h2><div class="page-songs">${top.map((t, i) => pageSongRow(t, i, i + 1)).join("")}</div>` +
+    `<h2 class="page-section">Albums</h2><div class="grid page-albums">${pageAlbums.map((k, i) => {
+      const g = groups.get(k);
+      return `<div class="album" data-album="${i}" style="--i:${i}">${coverHtml(g.cover, g.album)}<div class="name">${esc(g.album)}</div><div class="sub">${esc(g.year || countOf(g.count, "song"))}</div></div>`;
+    }).join("")}</div>` +
+    `<div id="page-similar"></div>`;
+  $("page-body").dataset.all = "artist";
+  pageAll = tracks;
+  loadAbout(name, null);
+}
+
+function renderAlbumPage(key) {
+  const tracks = state.tracks.filter((t) => albumKey(t) === key).sort(cmpTracks);
+  if (!tracks.length) return pageBack();
+  const t0 = tracks[0];
+  const multiDisc = new Set(tracks.map((t) => t.discNo)).size > 1;
+  pageSongs = tracks;
+  pageAll = tracks;
+  pageAlbums = [];
+  $("page-body").innerHTML =
+    `<header class="page-head">${coverHtml(tracks.find((t) => t.cover)?.cover, t0.album).replace('class="cover"', 'class="cover page-art"')}` +
+    `<div class="page-title"><div class="page-kind">Album</div><h1>${esc(t0.album)}</h1>` +
+    `<div class="hint"><a href="#" class="page-artist" data-artist="${esc(artistKey(t0))}">${esc(t0.albumArtist)}</a>${t0.year ? " · " + esc(t0.year) : ""} · ${countOf(tracks.length, "song")} · ${totalTime(tracks)}</div>` +
+    `<div class="page-actions"><button class="btn accent" data-act="play">Play</button><button class="btn" data-act="shuffle">Shuffle</button><button class="btn" data-act="add">Add to playlist…</button></div>` +
+    `<div id="page-tags" class="page-tags"></div></div></header>` +
+    `<p id="page-about" class="page-about"></p>` +
+    `<div class="page-songs">${tracks.map((t, i) => pageSongRow(t, i, multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || i + 1)).join("")}</div>`;
+  loadAbout(t0.albumArtist, t0.album);
+}
+let pageAll = [];
+
+/** Fill in what Last.fm knows: the text, tags and similar artists. */
+async function loadAbout(artist, album) {
+  const top = pageStack[pageStack.length - 1];
+  let info;
+  try {
+    info = await invoke("about", { artist, album });
+  } catch {
+    return;
+  }
+  if (pageStack[pageStack.length - 1] !== top) return; // moved on meanwhile
+  $("page-about").textContent = info.summary;
+  $("page-tags").innerHTML = info.tags.slice(0, 5).map((t) => `<span class="tag">${esc(t)}</span>`).join("");
+  if (!album && info.similar.length) {
+    const inLibrary = new Map(state.tracks.map((t) => [artistKey(t), t.albumArtist]));
+    $("page-similar").innerHTML = `<h2 class="page-section">Similar artists</h2><div class="page-tags similar">` +
+      info.similar.map((n) => inLibrary.has(n.toLowerCase())
+        ? `<a href="#" class="tag link" data-artist="${esc(n.toLowerCase())}">${esc(n)}</a>`
+        : `<span class="tag" title="Not in your library">${esc(n)}</span>`).join("") + `</div>`;
+  }
+}
+
+$("page-body").addEventListener("click", (e) => {
+  const artist = e.target.closest("[data-artist]");
+  if (artist) {
+    e.preventDefault();
+    return openPage("artist", artist.dataset.artist);
+  }
+  const album = e.target.closest("[data-album]");
+  if (album) return openPage("album", pageAlbums[album.dataset.album]);
+  const song = e.target.closest(".page-song");
+  if (song) return playTracks(pageSongs, Number(song.dataset.i));
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "play") playTracks(pageAll, 0);
+  if (act === "shuffle") playTracks(shuffled([...pageAll]), 0);
+  if (act === "add") {
+    const r = e.target.getBoundingClientRect();
+    openMenu(r.left, r.bottom + 4, "Add to playlist", playlistMenu(pageAll));
+  }
+});
+
+// ----------------------------------------------------- now playing & lyrics
+
+const npOpen = () => !$("np").hidden;
+function showNowPlaying(open) {
+  if (open && !current()) return;
+  $("np").hidden = !open;
+  document.body.classList.toggle("show-np", open);
+  $("np-btn").classList.toggle("on", open);
+  if (open) {
+    showDownloads(false);
+    showPage(false);
+    renderNowPlaying();
+  }
+}
+$("np-btn").addEventListener("click", () => showNowPlaying(!npOpen()));
+$("np-artist").addEventListener("click", () => current() && !current().sc && openPage("artist", artistKey(current())));
+$("np-album").addEventListener("click", () => current() && !current().sc && current().album && openPage("album", albumKey(current())));
+$("np-close").addEventListener("click", () => showNowPlaying(false));
+// the cover in the player opens it too (the cover element is replaced for every song)
+document.querySelector(".now").addEventListener("click", (e) => e.target.closest(".cover") && showNowPlaying(!npOpen()));
+document.addEventListener("keydown", (e) => e.key === "Escape" && npOpen() && $("settings").hidden && showNowPlaying(false));
+$("source").addEventListener("click", () => showNowPlaying(false), true);
+
+const lyricsCache = new Map(); // song path -> { synced: [{ t, text }] | null, plain, instrumental } | "error"
+const lyr = { path: null, lines: null, at: -1 };
+
+function renderNowPlaying() {
+  if (!npOpen()) return;
+  const t = current();
+  if (!t) return showNowPlaying(false);
+  $("np-cover").innerHTML = coverHtml(t.cover, t.album || t.title);
+  $("np-bg").innerHTML = t.cover ? `<img src="${esc(mediaSrc(t.cover))}" alt="" onerror="this.remove()">` : "";
+  $("np-title").textContent = t.title;
+  $("np-artist").textContent = t.artist;
+  $("np-album").textContent = [t.album, t.year].filter(Boolean).join(" · ");
+  // library songs: the artist and album lead to their pages
+  $("np-artist").classList.toggle("link", !t.sc);
+  $("np-album").classList.toggle("link", !t.sc && !!t.album);
+  if (lyr.path !== t.path) loadLyrics(t);
+}
+
+/** "[01:23.45] text" lines into [{ t: seconds, text }]. A line can carry several times. */
+function parseLrc(lrc) {
+  const lines = [];
+  for (const raw of lrc.split(/\r?\n/)) {
+    const times = [...raw.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+    if (!times.length) continue;
+    const text = raw.replace(/\[[^\]]*\]/g, "").trim();
+    for (const m of times) lines.push({ t: Number(m[1]) * 60 + Number(m[2]), text });
+  }
+  return lines.sort((a, b) => a.t - b.t);
+}
+
+async function loadLyrics(t) {
+  lyr.path = t.path;
+  lyr.lines = null;
+  lyr.at = -1;
+  const box = $("np-lyrics");
+  let got = lyricsCache.get(t.path);
+  if (!got) {
+    box.innerHTML = `<p class="np-note">Looking for lyrics…</p>`;
+    try {
+      const r = await invoke("lyrics", { title: t.title, artist: t.artist, album: t.album || "", duration: t.duration || audio.duration || 0 });
+      got = { synced: r.synced ? parseLrc(r.synced) : null, plain: r.plain, instrumental: r.instrumental };
+    } catch {
+      got = "error";
+    }
+    lyricsCache.set(t.path, got);
+    if (lyr.path !== t.path) return; // the song changed meanwhile
+  }
+  const credit = `<p class="np-credit">Lyrics from <a href="#" data-open="https://lrclib.net">LRCLIB</a></p>`;
+  if (got === "error") {
+    box.innerHTML = `<p class="np-note">Couldn't reach the lyrics service.</p>`;
+  } else if (got.synced?.length) {
+    lyr.lines = got.synced;
+    box.innerHTML = got.synced.map((l, i) => `<p class="np-line${l.text ? "" : " gap"}" data-i="${i}">${esc(l.text || "♪")}</p>`).join("") + credit;
+    box.scrollTop = 0;
+    syncLyrics();
+  } else if (got.plain) {
+    box.innerHTML = `<p class="np-note">These lyrics aren't timed to the song.</p>` +
+      got.plain.split("\n").map((l) => `<p class="np-line plain">${esc(l) || "&nbsp;"}</p>`).join("") + credit;
+  } else {
+    box.innerHTML = `<p class="np-note">${got.instrumental ? "Instrumental" : "No lyrics found for this song."}</p>`;
+  }
+}
+
+/** Light up the line being sung and keep it in the middle. */
+function syncLyrics() {
+  if (!lyr.lines || !npOpen()) return;
+  const now = audio.currentTime + 0.2;
+  let at = -1;
+  for (let i = 0; i < lyr.lines.length && lyr.lines[i].t <= now; i++) at = i;
+  if (at === lyr.at) return;
+  lyr.at = at;
+  const box = $("np-lyrics");
+  box.querySelector(".np-line.on")?.classList.remove("on");
+  const line = box.querySelector(`.np-line[data-i="${at}"]`);
+  if (!line) return;
+  line.classList.add("on");
+  box.scrollTo({ top: line.offsetTop - box.clientHeight / 2 + line.offsetHeight / 2, behavior: prefs.animations ? "smooth" : "auto" });
+}
+onAudio("timeupdate", syncLyrics);
+onAudio("seeked", () => {
+  lyr.at = -2;
+  syncLyrics();
+});
+$("np-lyrics").addEventListener("click", (e) => {
+  const link = e.target.closest("a[data-open]");
+  if (link) {
+    e.preventDefault();
+    return window.__TAURI__.opener.openUrl(link.dataset.open);
+  }
+  const line = e.target.closest(".np-line[data-i]");
+  if (line && lyr.lines) audio.currentTime = lyr.lines[line.dataset.i].t; // jump to that line
+});
+
 // ------------------------------------------------------- player: heart & queue
 
 /** The heart next to the playing song: a favourite in the library, a like on SoundCloud. */
@@ -2095,7 +3083,7 @@ function showQueue(open) {
   if (open) renderQueue(true);
 }
 // iOS has no volume slider, so the queue button sits with the song instead
-if (ios) document.querySelector(".now").append($("queue-btn"));
+if (phone) document.querySelector(".now").append($("queue-btn"));
 $("queue-btn").addEventListener("click", () => showQueue(!queueOpen()));
 $("queue-close").addEventListener("click", () => showQueue(false));
 document.addEventListener("keydown", (e) => e.key === "Escape" && queueOpen() && showQueue(false));
@@ -2343,7 +3331,7 @@ el.artistList.addEventListener("contextmenu", async (e) => {
       playShown(0);
     } },
   ];
-  if (!ios) items.push(
+  if (!phone) items.push(
     "-",
     { label: loaded ? `Download all (${loaded.filter(canDownload).length} of ${loaded.length})` : "Download all", icon: "i-download",
       action: async () => {
@@ -2419,6 +3407,8 @@ const viaLabel = (it) => (it.via === "yt-dlp" || (!it.via && !it.t.downloadable)
 
 function showDownloads(open = true) {
   closeSettings();
+  if (open && npOpen()) showNowPlaying(false);
+  if (open && pageOpen()) showPage(false);
   document.body.classList.toggle("show-downloads", open);
   $("downloads").hidden = !open;
   if (open) {
@@ -2543,7 +3533,7 @@ const SLSK_MAX_SEARCHES = 12;
 // Function declarations, not consts: renderDownloads (earlier in the file) runs while the file
 // is still loading and already needs some of these.
 /** The Soulseek client built into the app, instead of slskd: always on iOS, a test switch elsewhere. */
-const slskBuiltin = () => ios || !!state.settings.soulseek?.builtin;
+const slskBuiltin = () => phone || !!state.settings.soulseek?.builtin;
 
 function slskLoggedIn() {
   return !!state.slsk.status?.loggedIn;
@@ -3121,7 +4111,7 @@ function renderSlskTransfers() {
     const cls = slskOk(x) ? "saved" : failed ? "failed" : "";
     const bar = x.state.includes("InProgress") && x.size ? `<div class="dl-bar small"><i style="width:${(x.bytes / x.size) * 100}%"></i></div>` : "";
     const actions = !slskDone(x) ? `<button class="icon-btn" data-act="slsk-cancel" title="Cancel"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`
-      : (x.path && !ios ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
+      : (x.path && !phone ? `<button class="btn small" data-act="slsk-reveal">Show in folder</button>` : "") +
         (failed ? `<button class="btn small" data-act="slsk-retry">Retry</button>` : "") +
         `<button class="icon-btn" data-act="slsk-remove" title="Remove from list"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>`;
     const name = baseName(x.filename);
@@ -3598,7 +4588,7 @@ async function saveEditor() {
   }
   editor.saving = false;
   if (wasPlaying) {
-    audio.src = mediaSrc(t.path);
+    setSrc(audio, t.path);
     audio.addEventListener("loadedmetadata", () => (audio.currentTime = at), { once: true });
     if (playing) audio.play().catch(() => {});
   }

@@ -163,6 +163,76 @@ pub fn lastfm_scrobble(cfg: &LastfmConfig, track: &NowPlaying, started_at: i64) 
     lastfm_call(cfg, "track.scrobble", p, true).map(|_| ())
 }
 
+/// About an artist or album, for its page: a short text, tags, and (for artists) similar artists.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct About {
+    pub summary: String,
+    pub tags: Vec<String>,
+    pub similar: Vec<String>,
+    pub listeners: u64,
+    pub url: String,
+}
+
+/// Last.fm writes "… <a href=…>Read more on Last.fm</a>" at the end of its summaries; keep the words.
+fn plain_summary(html: &str) -> String {
+    let cut = html.find("<a href").map_or(html, |i| &html[..i]);
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in cut.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'").trim().to_string()
+}
+
+fn about(v: &Value) -> About {
+    let wiki = if v["bio"].is_object() { &v["bio"] } else { &v["wiki"] };
+    let names = |list: &Value| list.as_array().map(|a| a.iter().filter_map(|x| x["name"].as_str().map(String::from)).collect()).unwrap_or_default();
+    About {
+        summary: plain_summary(wiki["summary"].as_str().unwrap_or("")),
+        tags: names(&v["tags"]["tag"]),
+        similar: names(&v["similar"]["artist"]),
+        listeners: v["stats"]["listeners"].as_str().and_then(|s| s.parse().ok()).or(v["listeners"].as_str().and_then(|s| s.parse().ok())).unwrap_or(0),
+        url: v["url"].as_str().unwrap_or("").to_string(),
+    }
+}
+
+/// What Last.fm says about an artist.
+pub fn lastfm_artist_info(cfg: &LastfmConfig, artist: &str) -> Result<About, String> {
+    let json = lastfm_call(cfg, "artist.getInfo", BTreeMap::from([("artist", artist.to_string()), ("autocorrect", "1".into())]), false)?;
+    Ok(about(&json["artist"]))
+}
+
+/// What Last.fm says about an album.
+pub fn lastfm_album_info(cfg: &LastfmConfig, artist: &str, album: &str) -> Result<About, String> {
+    let json = lastfm_call(cfg, "album.getInfo", BTreeMap::from([("artist", artist.to_string()), ("album", album.to_string()), ("autocorrect", "1".into())]), false)?;
+    Ok(about(&json["album"]))
+}
+
+#[cfg(test)]
+mod about_tests {
+    use super::*;
+
+    #[test]
+    fn reads_artist_info() {
+        let v = serde_json::json!({
+            "url": "https://www.last.fm/music/Queen",
+            "stats": { "listeners": "6000000" },
+            "similar": { "artist": [{ "name": "Freddie Mercury" }] },
+            "tags": { "tag": [{ "name": "rock" }] },
+            "bio": { "summary": "Queen are a <b>British</b> rock band &amp; more. <a href=\"https://www.last.fm/music/Queen\">Read more on Last.fm</a>" }
+        });
+        let a = about(&v);
+        assert_eq!(a.summary, "Queen are a British rock band & more.");
+        assert_eq!((a.similar, a.tags, a.listeners), (vec!["Freddie Mercury".to_string()], vec!["rock".to_string()], 6_000_000));
+    }
+}
+
 /// Largest album cover URL Last.fm knows for this album (used as the Discord image).
 pub fn lastfm_album_art(cfg: &LastfmConfig, artist: &str, album: &str) -> Option<String> {
     let params = BTreeMap::from([("artist", artist.to_string()), ("album", album.to_string())]);

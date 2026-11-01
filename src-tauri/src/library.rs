@@ -52,6 +52,16 @@ impl Track {
     }
 }
 
+/// A playlist of library songs, in the order the user put them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    /// song paths
+    pub songs: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -70,6 +80,10 @@ pub struct Settings {
     pub favorites: Vec<String>,
     /// Favourites from an imported backup whose songs aren't in the library yet.
     pub pending_favorites: Vec<crate::backup::SongRef>,
+    /// The user's own playlists of library songs.
+    pub playlists: Vec<Playlist>,
+    /// The computer this phone is paired with (see computer.rs).
+    pub computer: crate::computer::ComputerLink,
     pub downloads: crate::downloads::DownloadConfig,
     pub soulseek: crate::slsk::SlskConfig,
 }
@@ -87,6 +101,8 @@ impl Default for Settings {
             soundcloud: Default::default(),
             favorites: Vec::new(),
             pending_favorites: Vec::new(),
+            playlists: Vec::new(),
+            computer: Default::default(),
             downloads: Default::default(),
             soulseek: Default::default(),
         }
