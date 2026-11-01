@@ -19,6 +19,8 @@
     "core:window:allow-set-min-size",
     "core:window:allow-maximize",
     "core:window:allow-unmaximize",
+    "core:window:allow-hide",
+    "core:window:allow-show",
     "core:webview:allow-set-webview-zoom",
     "opener:default"
   ]

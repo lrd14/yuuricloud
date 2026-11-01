@@ -20,7 +20,7 @@
       </div>
       <label class="search">
         <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
-        <input id="search" type="search" placeholder="Search artists, albums, songs" autocomplete="off" spellcheck="false" />
+        <input id="search" type="search" placeholder="Search artists, albums, songs" title="Also: genre:jazz · year:1990-1999 · plays>10 · rating>=4 · length<3:00 · added<30 · fav:yes · flac · -live" autocomplete="off" spellcheck="false" />
         <kbd>Ctrl F</kbd>
       </label>
       <button id="add-folder" class="btn">Add folder</button>
@@ -108,6 +108,7 @@
             <label class="song-only">Track<input id="ed-track" type="number" min="0" max="999" /></label>
             <label>Disc<input id="ed-disc" type="number" min="0" max="99" /></label>
             <label>Year<input id="ed-year" type="text" inputmode="numeric" maxlength="10" spellcheck="false" autocomplete="off" /></label>
+            <label class="wide">Genre<input id="ed-genre" type="text" list="ed-genres" spellcheck="false" autocomplete="off" /></label>
             <div id="ed-path" class="hint path wide"></div>
           </div>
           <div id="editor-find-panel" class="editor-find" hidden>
@@ -133,6 +134,7 @@
         </footer>
         <datalist id="ed-artists"></datalist>
         <datalist id="ed-albums"></datalist>
+        <datalist id="ed-genres"></datalist>
       </section>
     </div>
 
@@ -147,8 +149,17 @@
           <div id="np-title" class="np-title"></div>
           <div id="np-artist" class="np-artist"></div>
           <div id="np-album" class="np-album"></div>
+          <div id="np-stars" class="np-stars stars" hidden></div>
+        </div>
+        <div class="np-tools">
+          <button id="np-speed" class="btn small" title="Playback speed">1×</button>
+          <button id="np-loop" class="btn small" title="Click at the start of the part to repeat, then at its end">A–B loop</button>
+          <button id="np-loop-clear" class="icon-btn" title="Stop looping" hidden><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg></button>
+          <button id="np-vis-btn" class="btn small desktop-only">Visualizer: off</button>
+          <button id="np-lyr-edit" class="btn small">Edit lyrics</button>
         </div>
       </div>
+      <canvas id="np-vis" class="np-vis" hidden></canvas>
       <div id="np-lyrics" class="np-lyrics"></div>
     </section>
 
@@ -336,6 +347,30 @@
       </section>
     </div>
 
+    <div id="rename" class="settings-backdrop" hidden>
+      <section class="settings rename" role="dialog" aria-labelledby="rename-title">
+        <h1 id="rename-title">Rename files</h1>
+        <p class="hint">Name the files from their song info. You can use {track} {disc} {title} {artist} {album} {albumartist} {year}.</p>
+        <div class="rename-row">
+          <input id="rename-pattern" type="text" spellcheck="false" autocomplete="off" />
+          <select id="rename-preset" class="select">
+            <option value="">Examples…</option>
+            <option>{track} - {title}</option>
+            <option>{track}. {artist} - {title}</option>
+            <option>{disc}-{track} {title}</option>
+            <option>{artist} - {title}</option>
+          </select>
+        </div>
+        <div id="rename-list" class="rename-list"></div>
+        <footer class="ask-foot">
+          <span id="rename-note" class="hint"></span>
+          <span class="spacer"></span>
+          <button id="rename-cancel" class="btn">Cancel</button>
+          <button id="rename-ok" class="btn accent">Rename</button>
+        </footer>
+      </section>
+    </div>
+
     <aside id="queue" class="queue-panel" hidden>
       <header class="queue-head">
         <div>
@@ -428,6 +463,10 @@
             <div class="row desktop-only">
               <div><div class="label">Keep window on top</div></div>
               <label class="switch"><input type="checkbox" data-pref="onTop" /><span></span></label>
+            </div>
+            <div class="row desktop-only">
+              <div><div class="label">Keep playing in the tray when closed</div><div class="hint">Closing the window hides it; the icon in the tray (by the clock, or in the menu bar on a Mac) brings it back, and its menu plays, skips and quits.</div></div>
+              <label class="switch"><input type="checkbox" data-pref="closeToTray" /><span></span></label>
             </div>
           </div>
 
@@ -1083,6 +1122,8 @@
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z" /></symbol>
     <symbol id="i-globe" viewBox="0 0 24 24"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3zm5 16H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2z" /></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M3.9 12A3.1 3.1 0 0 1 7 8.9h4V7H7a5 5 0 0 0 0 10h4v-1.9H7A3.1 3.1 0 0 1 3.9 12zM8 13h8v-2H8zm9-6h-4v1.9h4a3.1 3.1 0 0 1 0 6.2h-4V17h4a5 5 0 0 0 0-10z" /></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" /></symbol>
+    <symbol id="i-blank" viewBox="0 0 24 24"></symbol>
     <symbol id="i-mini" viewBox="0 0 24 24"><path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z" /></symbol>
     <symbol id="i-expand" viewBox="0 0 24 24"><path d="M21 11V3h-8l3.29 3.29-10 10L3 13v8h8l-3.29-3.29 10-10z" /></symbol>
     <symbol id="i-queue" viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 4h12v2H3zm0 4h8v2H3zm14 0v-4h2v4h4v2h-4v4h-2v-4h-4v-2z" /></symbol>

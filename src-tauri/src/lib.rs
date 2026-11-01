@@ -10,6 +10,7 @@ mod history;
 mod integrations;
 mod library;
 mod lyrics;
+mod m3u;
 mod musicbrainz;
 #[cfg(desktop)]
 mod share;
@@ -18,6 +19,8 @@ mod slsk_native;
 mod soundcloud;
 mod tools;
 mod waveform;
+#[cfg(desktop)]
+mod watch;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,12 +34,15 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-/// How often and when a song was played, for the smart lists.
+/// How often and when a song was played (for the smart lists), and its star rating.
 #[derive(Clone, Default, Serialize, serde::Deserialize)]
 struct PlayStat {
     plays: u32,
     /// unix time of the last play
     last: i64,
+    /// 0 (not rated) to 5 stars
+    #[serde(default)]
+    rating: u8,
 }
 
 struct AppState {
@@ -427,6 +433,17 @@ fn record_play(state: State<AppState>, path: String) -> PlayStat {
     stat
 }
 
+/// Give a library song 1 to 5 stars, or 0 to take its rating away.
+#[tauri::command]
+fn set_rating(state: State<AppState>, path: String, rating: u8) -> PlayStat {
+    let mut stats = state.stats.lock().unwrap();
+    let stat = stats.entry(path).or_default();
+    stat.rating = rating.min(5);
+    let stat = stat.clone();
+    library::save_json(&state.data_dir.join("stats.json"), &*stats);
+    stat
+}
+
 /// Add a song to the listening history (once it has stopped playing).
 #[tauri::command]
 fn log_listen(state: State<AppState>, listen: history::Listen) -> Result<(), String> {
@@ -470,9 +487,26 @@ async fn loudness(app: AppHandle, path: String) -> Result<f32, String> {
 
 /// Lyrics for the playing song (see lyrics.rs).
 #[tauri::command]
-async fn lyrics(app: AppHandle, title: String, artist: String, album: String, duration: f64) -> Result<lyrics::Lyrics, String> {
-    let cache = app.state::<AppState>().data_dir.join("lyrics");
-    blocking(move || lyrics::get(&title, &artist, &album, duration, &cache)).await
+async fn lyrics(app: AppHandle, title: String, artist: String, album: String, duration: f64, path: Option<String>) -> Result<lyrics::Lyrics, String> {
+    let state = app.state::<AppState>();
+    let cache = state.data_dir.join("lyrics");
+    // lyrics saved in a library song's own file come first
+    let file = path.and_then(|p| library_song(&state, &p).ok());
+    blocking(move || match file.as_deref().and_then(lyrics::from_file) {
+        Some(own) => Ok(own),
+        None => lyrics::get(&title, &artist, &album, duration, &cache),
+    })
+    .await
+}
+
+/// Save (or, with empty text, remove) lyrics in a library song's file.
+#[tauri::command]
+async fn save_lyrics(app: AppHandle, path: String, text: String) -> Result<(), String> {
+    blocking(move || {
+        let file = library_song(&app.state::<AppState>(), &path)?;
+        editor::write_lyrics(&file, &text)
+    })
+    .await
 }
 
 /// Show a library song in the system file manager.
@@ -1394,6 +1428,137 @@ async fn export_backup(app: AppHandle, include_logins: bool) -> Result<Option<St
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+#[derive(serde::Deserialize)]
+struct Rename {
+    path: String,
+    /// the new file name, without the folder or the extension
+    name: String,
+}
+
+#[derive(Serialize)]
+struct Renamed {
+    /// old path -> new path
+    moved: Vec<(String, String)>,
+    failed: Vec<String>,
+    settings: Settings,
+}
+
+/// Characters no file name may have on any of the systems the music might be copied to.
+fn clean_file_name(name: &str) -> String {
+    let s: String = name.chars().map(|c| if r#"<>:"/\|?*"#.contains(c) || c.is_control() { '_' } else { c }).collect();
+    s.trim().trim_end_matches('.').trim().chars().take(180).collect()
+}
+
+/// Rename song files (in their own folders, keeping the extension), and update everything that
+/// refers to them by path: favourites, playlists and play counts.
+#[tauri::command]
+async fn rename_songs(app: AppHandle, renames: Vec<Rename>) -> Result<Renamed, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut moved = Vec::new();
+        let mut failed = Vec::new();
+        for r in &renames {
+            let old = library_song(&state, &r.path)?;
+            let name = clean_file_name(&r.name);
+            if name.is_empty() {
+                failed.push(format!("{}: the new name is empty", r.path));
+                continue;
+            }
+            let ext = old.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+            let new = old.with_file_name(format!("{name}{ext}"));
+            if new == old {
+                continue;
+            }
+            // a different file already has that name (changing only capitals is fine)
+            let same_file = new.to_string_lossy().to_lowercase() == old.to_string_lossy().to_lowercase();
+            if new.exists() && !same_file {
+                failed.push(format!("{}: there's already a file called that", new.display()));
+                continue;
+            }
+            match std::fs::rename(&old, &new) {
+                Ok(()) => moved.push((r.path.clone(), new.to_string_lossy().into_owned())),
+                Err(e) => failed.push(format!("{}: {e}", old.display())),
+            }
+        }
+        let map: HashMap<&str, &str> = moved.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let swap = |p: &mut String| {
+            if let Some(n) = map.get(p.as_str()) {
+                *p = n.to_string();
+            }
+        };
+        let settings = {
+            let mut s = state.settings.lock().unwrap();
+            s.favorites.iter_mut().for_each(swap);
+            s.playlists.iter_mut().flat_map(|p| p.songs.iter_mut()).for_each(swap);
+            state.save_settings(&s);
+            s.clone()
+        };
+        {
+            let mut stats = state.stats.lock().unwrap();
+            for (a, b) in &moved {
+                if let Some(st) = stats.remove(a) {
+                    stats.insert(b.clone(), st);
+                }
+            }
+            library::save_json(&state.data_dir.join("stats.json"), &*stats);
+        }
+        state.tracks.lock().unwrap().iter_mut().for_each(|t| swap(&mut t.path));
+        Ok(Renamed { moved, failed, settings })
+    })
+    .await
+}
+
+/// Save songs as an .m3u8 playlist file (the user picks where). None when cancelled.
+#[tauri::command]
+async fn export_m3u(app: AppHandle, name: String, songs: Vec<m3u::Entry>) -> Result<Option<String>, String> {
+    let text = m3u::write(&songs);
+    #[cfg(desktop)]
+    {
+        let safe: String = name.chars().map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c }).collect();
+        let picked = app.dialog().file().set_title("Save the playlist").set_file_name(format!("{}.m3u8", safe.trim())).add_filter("Playlist", &["m3u8", "m3u"]).blocking_save_file();
+        let Some(picked) = picked else { return Ok(None) };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        std::fs::write(&path, text).map_err(|e| format!("Couldn't save the playlist: {e}"))?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, name, text);
+        Err("Saving playlist files works on a computer".into())
+    }
+}
+
+#[derive(Serialize)]
+struct M3uImport {
+    name: String,
+    songs: Vec<String>,
+    missing: usize,
+}
+
+/// Read an .m3u / .m3u8 file the user picks and find its songs in the library.
+#[tauri::command]
+async fn import_m3u(app: AppHandle) -> Result<Option<M3uImport>, String> {
+    #[cfg(desktop)]
+    {
+        let picked = app.dialog().file().set_title("Choose a playlist file").add_filter("Playlist", &["m3u8", "m3u"]).blocking_pick_file();
+        let Some(picked) = picked else { return Ok(None) };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(&path).map_err(|e| format!("Couldn't read the playlist: {e}"))?;
+        // .m3u8 is UTF-8; old .m3u files are often Windows-1252, which this reads near enough
+        let text = String::from_utf8(bytes.clone()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
+        let listed = m3u::parse(&text, path.parent().unwrap_or(Path::new("")));
+        let tracks = app.state::<AppState>().tracks.lock().unwrap().clone();
+        let (songs, missing) = m3u::match_library(&listed, &tracks);
+        let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Imported".into());
+        Ok(Some(M3uImport { name, songs, missing }))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Opening playlist files works on a computer".into())
+    }
+}
+
 #[derive(Serialize)]
 struct ImportResult {
     settings: Settings,
@@ -1695,6 +1860,8 @@ async fn scan(app: AppHandle, state: State<'_, AppState>, full: bool) -> Result<
     };
     let cover_dir = state.cover_dir();
     let emitter = app.clone();
+    #[cfg(desktop)]
+    watch::watch(&app, &folders);
     let result = tauri::async_runtime::spawn_blocking(move || {
         library::scan(&folders, prefer_tags, cache, &cover_dir, |done, total| {
             let _ = emitter.emit("scan-progress", (done, total));
@@ -1716,6 +1883,73 @@ async fn scan(app: AppHandle, state: State<'_, AppState>, full: bool) -> Result<
     }
     *state.tracks.lock().unwrap() = tracks.clone();
     Ok(tracks)
+}
+
+/// The icon in the system tray (the notification area on Windows, the menu bar on a Mac): its
+/// menu plays, pauses and skips, and clicking it brings the window back. The frontend gets
+/// "tray" events with the menu item's id.
+#[cfg(desktop)]
+fn make_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    let item = |id: &str, text: &str| MenuItem::with_id(app, id, text, true, None::<&str>);
+    let menu = Menu::with_items(
+        app,
+        &[
+            &item("playPause", "Play / pause")?,
+            &item("next", "Next song")?,
+            &item("prev", "Previous song")?,
+            &PredefinedMenuItem::separator(app)?,
+            &item("show", "Show yuuricloud")?,
+            &item("quit", "Quit")?,
+        ],
+    )?;
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("yuuricloud")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, e| match e.id().as_ref() {
+            "show" => show_window(app),
+            id => {
+                let _ = app.emit("tray", id);
+            }
+        })
+        .on_tray_icon_event(|tray, e| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+                show_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+#[cfg(desktop)]
+fn show_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// The tray icon's tooltip: what's playing.
+#[tauri::command]
+fn tray_tooltip(app: AppHandle, text: String) {
+    #[cfg(desktop)]
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(text));
+    }
+    #[cfg(mobile)]
+    let _ = (app, text);
+}
+
+/// Really quit (closing the window may only hide it, with "keep playing in the tray" on).
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1769,6 +2003,10 @@ pub fn run() {
             });
             #[cfg(mobile)]
             open_links(app);
+            #[cfg(desktop)]
+            if let Err(e) = make_tray(app) {
+                eprintln!("no tray icon: {e}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1797,6 +2035,13 @@ pub fn run() {
             about,
             record_play,
             log_listen,
+            set_rating,
+            tray_tooltip,
+            rename_songs,
+            save_lyrics,
+            quit_app,
+            export_m3u,
+            import_m3u,
             get_history,
             delete_song,
             save_many_tags,

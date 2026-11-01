@@ -26,6 +26,7 @@ pub struct SongTags {
     pub track_no: Option<u32>,
     pub disc_no: Option<u32>,
     pub year: String,
+    pub genre: String,
     /// The embedded cover as a small data: URL, for the editor's preview.
     pub cover: Option<String>,
 }
@@ -40,6 +41,8 @@ pub struct TagEdit {
     pub track_no: Option<u32>,
     pub disc_no: Option<u32>,
     pub year: String,
+    #[serde(default)]
+    pub genre: Option<String>,
 }
 
 /// What to do with the cover picture.
@@ -80,6 +83,7 @@ fn read_tags(path: &Path, with_cover: bool) -> Result<SongTags, String> {
         year: text(&|t| {
             [ItemKey::Year, ItemKey::RecordingDate, ItemKey::OriginalReleaseDate].into_iter().find_map(|k| t.get_string(k).map(String::from))
         }),
+        genre: text(&|t| t.genre().map(|s| s.to_string())),
         cover: picture.filter(|_| with_cover).and_then(|b| preview(&b).ok()),
     })
 }
@@ -165,6 +169,10 @@ pub fn write(path: &Path, edit: &TagEdit, cover: &CoverEdit) -> Result<(), Strin
     // both. Write it to each the format supports, so no stale date is left to win on reading.
     set_text(tag, ItemKey::RecordingDate, &edit.year);
     set_text(tag, ItemKey::Year, &edit.year);
+    // None: an older caller that doesn't know about genres; leave it as it is
+    if let Some(genre) = &edit.genre {
+        set_text(tag, ItemKey::Genre, genre);
+    }
     apply_cover(tag, cover, picture);
     save(&file, path)
 }
@@ -179,6 +187,7 @@ pub struct TagChanges {
     pub album_artist: Option<String>,
     pub album: Option<String>,
     pub year: Option<String>,
+    pub genre: Option<String>,
     pub track_no: Option<u32>,
     pub disc_no: Option<u32>,
 }
@@ -195,6 +204,9 @@ impl TagChanges {
         set(&mut e.album_artist, &self.album_artist);
         set(&mut e.album, &self.album);
         set(&mut e.year, &self.year);
+        if self.genre.is_some() {
+            e.genre = self.genre.clone();
+        }
         if let Some(n) = self.track_no {
             e.track_no = Some(n).filter(|n| *n > 0);
         }
@@ -215,6 +227,7 @@ pub fn change(path: &Path, changes: &TagChanges, cover: &CoverEdit) -> Result<()
         track_no: now.track_no,
         disc_no: now.disc_no,
         year: now.year,
+        genre: Some(now.genre),
     };
     changes.apply_to(&mut edit);
     if edit.title.trim().is_empty() {
@@ -222,6 +235,13 @@ pub fn change(path: &Path, changes: &TagChanges, cover: &CoverEdit) -> Result<()
         edit.title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     }
     write(path, &edit, cover)
+}
+
+/// Save lyrics into a song file (empty text takes them out).
+pub fn write_lyrics(path: &Path, text: &str) -> Result<(), String> {
+    let mut file = open(path)?;
+    set_text(tag_mut(&mut file), ItemKey::Lyrics, text);
+    save(&file, path)
 }
 
 /// Write only the cover into a song (for "use for the whole album").
@@ -271,11 +291,12 @@ mod tests {
             track_no: Some(7),
             disc_no: None,
             year: "2021".into(),
+            genre: Some("Shoegaze".into()),
         };
         write(&copy, &edit, &CoverEdit::File { path: pic.to_string_lossy().into_owned() }).unwrap();
         let back = read(&copy).unwrap();
         assert_eq!((back.title.as_str(), back.artist.as_str(), back.album.as_str()), ("New Title", "Some Artist", "An Album"));
-        assert_eq!((back.track_no, back.year.as_str()), (Some(7), "2021"));
+        assert_eq!((back.track_no, back.year.as_str(), back.genre.as_str()), (Some(7), "2021", "Shoegaze"));
         assert!(back.cover.is_some());
 
         write_cover(&copy, &CoverEdit::Remove).unwrap();

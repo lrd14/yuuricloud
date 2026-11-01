@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 /// Formats every desktop webview (WebView2, WebKit, WebKitGTK) can usually decode.
-const AUDIO_EXTS: &[&str] = &["mp3", "flac", "m4a", "mp4", "aac", "ogg", "oga", "opus", "wav", "webm"];
+pub const AUDIO_EXTS: &[&str] = &["mp3", "flac", "m4a", "mp4", "aac", "ogg", "oga", "opus", "wav", "webm"];
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif"];
 const COVER_NAMES: &[&str] = &["cover", "folder", "front", "album", "albumart", "albumartsmall"];
 
@@ -44,7 +44,15 @@ pub struct Track {
     /// Small copy of `cover` for the album and song grids.
     #[serde(default)]
     pub thumb: String,
+    #[serde(default)]
+    pub genre: String,
+    /// Which SCAN_VERSION read this song; older entries in the cache are read again.
+    #[serde(default)]
+    pub v: u32,
 }
+
+/// Bump when songs gain something read from their files, so cached songs are read again.
+pub const SCAN_VERSION: u32 = 2;
 
 impl Track {
     fn album_key(&self) -> String {
@@ -120,6 +128,7 @@ struct Tags {
     track_no: Option<u32>,
     disc_no: Option<u32>,
     year: Option<String>,
+    genre: Option<String>,
     duration: f64,
 }
 
@@ -138,6 +147,7 @@ fn read_tags(path: &Path) -> Tags {
     out.album_artist = non_empty(tag.get_string(ItemKey::AlbumArtist));
     out.track_no = tag.track().filter(|n| *n > 0);
     out.disc_no = tag.disk().filter(|n| *n > 0);
+    out.genre = non_empty(tag.genre());
     out.year = [ItemKey::Year, ItemKey::RecordingDate, ItemKey::OriginalReleaseDate]
         .into_iter()
         .filter_map(|k| tag.get_string(k))
@@ -289,6 +299,28 @@ fn build_track(path: &Path, root: &Path, mtime: u64, prefer_tags: bool) -> Track
         duration: tags.duration,
         cover: String::new(),
         thumb: String::new(),
+        genre: tags.genre.map(|g| clean_genre(&g)).unwrap_or_default(),
+        v: SCAN_VERSION,
+    }
+}
+
+/// ID3v1-style genres come as "(17)" or "17"; old taggers write "Rock;Pop" or "Rock / Pop".
+/// Keep the first, by name.
+fn clean_genre(raw: &str) -> String {
+    const ID3: [&str; 80] = [
+        "Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge", "Hip-Hop", "Jazz", "Metal", "New Age", "Oldies", "Other", "Pop", "R&B",
+        "Rap", "Reggae", "Rock", "Techno", "Industrial", "Alternative", "Ska", "Death Metal", "Pranks", "Soundtrack", "Euro-Techno", "Ambient",
+        "Trip-Hop", "Vocal", "Jazz+Funk", "Fusion", "Trance", "Classical", "Instrumental", "Acid", "House", "Game", "Sound Clip", "Gospel", "Noise",
+        "Alternative Rock", "Bass", "Soul", "Punk", "Space", "Meditative", "Instrumental Pop", "Instrumental Rock", "Ethnic", "Gothic", "Darkwave",
+        "Techno-Industrial", "Electronic", "Pop-Folk", "Eurodance", "Dream", "Southern Rock", "Comedy", "Cult", "Gangsta", "Top 40", "Christian Rap",
+        "Pop/Funk", "Jungle", "Native American", "Cabaret", "New Wave", "Psychedelic", "Rave", "Showtunes", "Trailer", "Lo-Fi", "Tribal", "Acid Punk",
+        "Acid Jazz", "Polka", "Retro", "Musical", "Rock & Roll", "Hard Rock",
+    ];
+    let first = raw.split([';', '/', '\0']).next().unwrap_or("").trim();
+    let number = first.trim_start_matches('(').trim_end_matches(')');
+    match number.parse::<usize>() {
+        Ok(n) if n < ID3.len() => ID3[n].to_string(),
+        _ => first.to_string(),
     }
 }
 
@@ -482,7 +514,7 @@ pub fn scan(
         let Ok(mtime) = fs::metadata(path).and_then(|m| m.modified()) else { continue };
         let mtime = mtime.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         match cache.get(&key) {
-            Some(old) if old.mtime == mtime && Path::new(&old.root) == root.as_path() => tracks.push(old.clone()),
+            Some(old) if old.mtime == mtime && old.v == SCAN_VERSION && Path::new(&old.root) == root.as_path() => tracks.push(old.clone()),
             _ => tracks.push(build_track(path, root, mtime, prefer_tags)),
         }
     }
@@ -619,12 +651,15 @@ mod tests {
         Track {
             path: path.into(), root: String::new(), mtime: 0, title: "t".into(), artist: artist.into(),
             album_artist: artist.into(), album: album.into(), track_no: 0, disc_no: 1, year: String::new(),
-            duration: 0.0, cover: String::new(), thumb: String::new(),
+            duration: 0.0, cover: String::new(), thumb: String::new(), genre: String::new(), v: SCAN_VERSION,
         }
     }
 
     #[test]
     fn keeps_artists_of_loose_songs_apart() {
+        assert_eq!(clean_genre("(17)"), "Rock");
+        assert_eq!(clean_genre("Shoegaze; Dream Pop"), "Shoegaze");
+        assert_eq!(clean_genre("Electronic / IDM"), "Electronic");
         let mut tracks = vec![
             loose("/m/sc/a.m4a", "bbyglo", UNKNOWN_ALBUM),
             loose("/m/sc/b.wav", "lycoris", UNKNOWN_ALBUM),
