@@ -4010,9 +4010,12 @@ async function removeAllDuplicates() {
     resume();
     return setStatus(String(e), 6000);
   }
-  // a deleted copy that was playing gives way to the kept one
+  // the deleted copies leave the library, and the queue plays the kept copy in their place
+  // (replacing the queue's entries, not changing them: they're the same songs as the library's)
   const gaveWay = new Map(r.removed);
-  for (const t of state.queue) if (gaveWay.has(t.path)) Object.assign(t, state.tracks.find((x) => x.path === gaveWay.get(t.path)) || {});
+  const byPath = new Map(state.tracks.map((t) => [t.path, t]));
+  state.queue = state.queue.map((t) => (gaveWay.has(t.path) ? byPath.get(gaveWay.get(t.path)) || t : t));
+  if (radio.on) radio.queue = state.queue;
   state.tracks = state.tracks.filter((t) => !gaveWay.has(t.path));
   state.favorites = new Set(r.settings.favorites || []);
   state.playlists = r.settings.playlists || [];
@@ -5885,7 +5888,8 @@ function releasePlaying(paths) {
   audio.removeAttribute("src");
   audio.load();
   return () => {
-    setSrc(audio, t.path);
+    const now = current() || t;
+    setSrc(audio, now.path);
     audio.addEventListener("loadedmetadata", () => (audio.currentTime = at), { once: true });
     if (playing) audio.play().catch(() => {});
   };
