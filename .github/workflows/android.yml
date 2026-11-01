@@ -39,7 +39,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
+          # 64-bit phones only: soulseek-rs-lib doesn't build for 32-bit Android, and phones from the
+          # last several years are all 64-bit
+          targets: aarch64-linux-android
 
       # no Rust cache: plugin build scripts (the yuuricloud:// links) must run for the fresh project
       - run: npm ci
@@ -54,7 +56,7 @@ jobs:
         run: npm run tauri icon -- icon.png
 
       - name: Build
-        run: npm run tauri android build -- --ci --apk --target aarch64 --target armv7
+        run: npm run tauri android build -- --ci --apk --target aarch64
 
       - name: Sign
         id: apk
