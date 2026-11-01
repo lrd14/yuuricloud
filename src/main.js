@@ -75,12 +75,13 @@ const vol = () => baseVolume * trackGain;
 const ACCENTS = ["#8b7cff", "#5b8cff", "#2fb7c4", "#3fbf7f", "#e2b33c", "#f0864a", "#ef5a6f", "#e06ad0"];
 const DEFAULT_PREFS = {
   accent: ACCENTS[0], blur: true, tint: 0.55, coverSize: "medium", scale: "1", compact: false,
-  showCounts: true, onTop: false,
+  showCounts: true, onTop: false, theme: "dark",
   animations: true, speed: "1", ambient: true, equalizer: true, hoverLift: true, waveform: true,
   waveHeight: 34, waveStyle: "bars", waveBars: 240, coverColors: true, coverTint: true,
   appIcon: "yuuri", scView: "list", onboarded: false, checkUpdates: true, skipVersion: "",
   ignoreThe: true, scanOnStart: true,
   crossfade: 0, normalize: false, eq: false, eqPreset: "flat", eqCustom: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  keys: {}, smartLists: [], renamePattern: "", closeToTray: false, trayHintShown: false, visualizer: "off", keepPitch: true,
   singleClick: false, fade: true, rememberModes: false, shuffle: SHUFFLE_OFF, repeat: REPEAT_OFF, resume: true,
 };
 const COVER_SIZES = { small: "120px", medium: "156px", large: "200px" };
@@ -138,7 +139,73 @@ const SMART = [
   { id: "never", name: "Never played", list: (ts) => ts.filter((t) => !plays(t)).sort(cmpTracks) },
   { id: "forgotten", name: "Forgotten favourites", list: (ts) => ts.filter((t) => state.favorites.has(t.path) && Date.now() / 1000 - lastPlayed(t) > 60 * 86400).sort(cmpTracks) },
 ];
-const smartOf = (key) => (key?.startsWith(SMART_PREFIX) ? SMART.find((x) => SMART_PREFIX + x.id === key) : null);
+/** The built-in smart lists and the user's own (prefs.smartLists: a name and a search). */
+function allSmart() {
+  return [...SMART, ...(prefs.smartLists || []).map((c) => ({ ...c, custom: true, list: (ts) => {
+    const m = trackMatcher(c.query.toLowerCase());
+    return (m ? ts.filter(m) : []).sort(cmpTracks);
+  } }))];
+}
+const smartOf = (key) => (key?.startsWith(SMART_PREFIX) ? allSmart().find((x) => SMART_PREFIX + x.id === key) : null);
+const rating = (t) => state.stats?.[t.path]?.rating || 0;
+
+// ------------------------------------------------------------- search syntax
+// Besides plain words, the search box takes filters: artist:, album:, title:, genre:, folder:,
+// year:1998 (or 1990-1999), plays>10, rating>=4, length<3:00, added<30 (days ago), played<7,
+// fav:yes, format:flac (or just flac). "Quotes" keep words together; a leading - excludes.
+
+const FIELDS = {
+  artist: "artist", by: "artist", album: "album", title: "title", song: "title", genre: "genre", folder: "folder", path: "folder",
+  year: "year", plays: "plays", played: "played", rating: "rating", stars: "rating", length: "length", time: "length",
+  added: "added", fav: "fav", favourite: "fav", favorite: "fav", format: "format", ext: "format", type: "format",
+};
+const unquote = (s) => s.replace(/^"(.*)"$/, "$1");
+function parseQuery(q) {
+  return (q.match(/-?[a-z]+(?::|[<>]=?|=)"[^"]*"?|-?"[^"]*"?|\S+/gi) || []).map((part) => {
+    const neg = part.length > 1 && part.startsWith("-");
+    if (neg) part = part.slice(1);
+    const m = part.match(/^([a-z]+)(:|[<>]=?|=)(.*)$/i);
+    if (m && FIELDS[m[1].toLowerCase()]) return { neg, field: FIELDS[m[1].toLowerCase()], op: m[2], value: unquote(m[3]).replace(/"/g, "").toLowerCase() };
+    return { neg, word: unquote(part).replace(/"/g, "").toLowerCase() };
+  }).filter((x) => (x.word ?? x.value) !== "");
+}
+/** "3:30" → 210 for lengths; otherwise a plain number. */
+const queryNumber = (v) => (/^\d+:\d{1,2}$/.test(v) ? Number(v.split(":")[0]) * 60 + Number(v.split(":")[1]) : parseFloat(v));
+function compareNum(x, op, v) {
+  const range = op === ":" && v.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/);
+  if (range) return x >= Number(range[1]) && x <= Number(range[2]);
+  const n = queryNumber(v);
+  if (isNaN(n)) return false;
+  return op === ">" ? x > n : op === ">=" ? x >= n : op === "<" ? x < n : op === "<=" ? x <= n : Math.round(x) === n;
+}
+const fileFormat = (t) => (t.path.match(/\.([a-z0-9]+)$/i)?.[1] || "").toLowerCase();
+function termMatches(term, t) {
+  if (term.word != null) {
+    return [t.title, t.artist, t.albumArtist, t.album, t.genre || ""].some((s) => s.toLowerCase().includes(term.word)) || fileFormat(t) === term.word;
+  }
+  const v = term.value, num = (x) => compareNum(x, term.op, v), now = Date.now() / 1000;
+  switch (term.field) {
+    case "artist": return `${t.artist}\n${t.albumArtist}`.toLowerCase().includes(v);
+    case "album": return t.album.toLowerCase().includes(v);
+    case "title": return t.title.toLowerCase().includes(v);
+    case "genre": return (t.genre || "").toLowerCase().includes(v);
+    case "folder": return t.path.toLowerCase().includes(v);
+    case "format": return fileFormat(t) === v.replace(/^\./, "");
+    case "fav": return state.favorites.has(t.path) === !/^(no|false|0|n)$/.test(v);
+    case "year": return num(parseInt(t.year) || 0);
+    case "plays": return num(plays(t));
+    case "rating": return num(rating(t));
+    case "length": return num(t.duration || 0);
+    case "added": return num((now - t.mtime) / 86400);
+    case "played": return lastPlayed(t) ? num((now - lastPlayed(t)) / 86400) : /^(no|never|false|0)$/.test(v) && term.op === ":";
+  }
+  return false;
+}
+/** A test for songs matching a search, or null for an empty one. */
+function trackMatcher(q) {
+  const terms = parseQuery(q);
+  return terms.length ? (t) => terms.every((term) => term.neg !== termMatches(term, t)) : null;
+}
 const smartLists = new Map(); // key -> songs, for the current search; cleared on every redraw
 function smartList(key) {
   if (!smartLists.has(key)) smartLists.set(key, smartOf(key)?.list(state.visible) || []);
@@ -260,6 +327,9 @@ async function load() {
 }
 
 /** `quiet`: a check in the background, which only speaks up (and redraws) when something changed. */
+// a song was added to, changed in or taken out of a library folder (watch.rs): pick it up
+listen("library-changed", () => state.tracks && rescan(false, true));
+
 async function rescan(full, quiet = false) {
   if (state.scanning) {
     state.rescanQueued = true;
@@ -350,11 +420,8 @@ $("local-hint-close").addEventListener("click", () => {
 // -------------------------------------------------------------- rendering
 
 function applySearch() {
-  const q = state.query;
-  state.visible = q
-    ? state.tracks.filter((t) =>
-        [t.title, t.artist, t.albumArtist, t.album].some((s) => s.toLowerCase().includes(q)))
-    : state.tracks;
+  const match = trackMatcher(state.query);
+  state.visible = match ? state.tracks.filter(match) : state.tracks;
   if (state.source !== "local") return; // the SoundCloud view owns the panels
   const hasLibrary = state.tracks.length || state.settings.folders.length;
   el.empty.hidden = !!hasLibrary;
@@ -386,9 +453,15 @@ function renderArtists() {
     item(null, "All artists", new Set(state.visible.map(albumKey)).size) +
     (favCount ? item(FAV_KEY, "♥ Favourites", favCount) : "") +
     group("Smart lists") +
-    SMART.map((x) => [x, smartList(SMART_PREFIX + x.id).length]).filter(([x, count]) => count || x.id === "added")
+    allSmart().map((x) => [x, smartList(SMART_PREFIX + x.id).length]).filter(([x, count]) => count || x.id === "added" || x.custom)
       .map(([x, count]) => item(SMART_PREFIX + x.id, x.name, count)).join("") +
+    `<li class="new-playlist" data-new-smart style="--i:${n++}">＋ New smart list</li>` +
+    `<li class="new-playlist" data-open-page="stats" style="--i:${n++}">Listening stats</li>` +
+    `<li class="new-playlist" data-open-page="dupes" style="--i:${n++}">Find duplicates</li>` +
+    `<li class="new-playlist" data-open-page="genres" style="--i:${n++}">Genres</li>` +
+    `<li class="new-playlist" data-open-page="folders" style="--i:${n++}">Folders</li>` +
     group("Playlists") + lists + `<li class="new-playlist" data-new-playlist style="--i:${n++}">＋ New playlist</li>` +
+    (phone ? "" : `<li class="new-playlist" data-import-m3u style="--i:${n++}">＋ Open an .m3u playlist…</li>`) +
     group("Artists") +
     keys.map((k) => item(k, artists.get(k).name, artists.get(k).albums.size)).join("");
   if (state.artist === null) el.artistList.firstElementChild?.classList.add("sel");
@@ -609,7 +682,8 @@ function playShown(index) {
 }
 
 /** Play `tracks` from song `index`, in the current shuffle mode. */
-function playTracks(tracks, index) {
+function playTracks(tracks, index, keepRadio = false) {
+  if (!keepRadio) radio.on = false;
   state.queue = [...tracks];
   state.order = state.queue.map((_, i) => i);
   if (state.shuffle === SHUFFLE_RANDOM) {
@@ -675,6 +749,7 @@ function playCurrent(autoplay = true) {
   el.nowText.classList.add("changed");
   el.ambient.innerHTML = t.cover ? `<img src="${esc(mediaSrc(t.cover))}" alt="" onerror="this.remove()">` : "";
   document.title = `${t.title} · ${t.artist} — yuuricloud`;
+  if (!phone) invoke("tray_tooltip", { text: `${t.title} · ${t.artist}`.slice(0, 120) }).catch(() => {});
   highlightPlaying();
   updateMediaSession(t);
   loadWaveform(t);
@@ -756,6 +831,7 @@ function togglePlay() {
 
 function next(auto = false) {
   if (!state.order.length) return;
+  radioTopUp();
   if (auto && state.repeat === REPEAT_ONE) {
     audio.currentTime = 0;
     audio.play().catch(() => {});
@@ -818,20 +894,66 @@ function setRepeat(mode) {
   if (prefs.rememberModes && prefs.repeat !== state.repeat) setPref("repeat", state.repeat);
 }
 
-/** OS media keys / lock-screen controls where the webview supports them. */
+/** OS media keys and the system's now-playing controls (Windows' media overlay, macOS Now
+ * Playing, Linux MPRIS, the phone lock screen) where the webview supports them. */
+const mediaSession = "mediaSession" in navigator ? navigator.mediaSession : null;
+let artFor = null;
 function updateMediaSession(t) {
-  if (!("mediaSession" in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: t.title, artist: t.artist, album: t.album,
-    artwork: t.cover ? [{ src: mediaSrc(t.cover) }] : [],
+  if (!mediaSession) return;
+  const meta = { title: t.title, artist: t.artist, album: t.album };
+  mediaSession.metadata = new MediaMetadata({ ...meta, artwork: [] });
+  // the system fetches the artwork itself and can't always read app files, so hand it a picture
+  const pic = t.thumb || t.cover;
+  artFor = t;
+  if (pic) {
+    coverDataUrl(pic).then((src) => {
+      if (artFor === t && src) mediaSession.metadata = new MediaMetadata({ ...meta, artwork: [{ src, sizes: "256x256", type: "image/jpeg" }] });
+    });
+  }
+}
+/** A cover as a 256 px JPEG data: URL (null if it can't be loaded). */
+function coverDataUrl(pic) {
+  return new Promise((done) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const c = Object.assign(document.createElement("canvas"), { width: 256, height: 256 });
+        c.getContext("2d").drawImage(img, 0, 0, 256, 256);
+        done(c.toDataURL("image/jpeg", 0.85));
+      } catch {
+        done(mediaSrc(pic));
+      }
+    };
+    img.onerror = () => done(null);
+    img.src = mediaSrc(pic);
   });
 }
-if ("mediaSession" in navigator) {
-  const ms = navigator.mediaSession;
-  ms.setActionHandler("play", startPlayback);
-  ms.setActionHandler("pause", pausePlayback);
-  ms.setActionHandler("previoustrack", prev);
-  ms.setActionHandler("nexttrack", () => next());
+function syncMediaPosition() {
+  if (!mediaSession?.setPositionState || !isFinite(audio.duration) || !audio.duration) return;
+  try {
+    mediaSession.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: audio.playbackRate || 1 });
+  } catch {}
+}
+if (mediaSession) {
+  const handlers = {
+    play: startPlayback,
+    pause: pausePlayback,
+    stop: pausePlayback,
+    previoustrack: prev,
+    nexttrack: () => next(),
+    seekbackward: (d) => seekBy(-(d.seekOffset || 10)),
+    seekforward: (d) => seekBy(d.seekOffset || 10),
+    seekto: (d) => {
+      if (isFinite(d.seekTime)) audio.currentTime = d.seekTime;
+      syncMediaPosition();
+    },
+  };
+  for (const [name, fn] of Object.entries(handlers)) {
+    try {
+      mediaSession.setActionHandler(name, fn);
+    } catch {} // not every webview knows every action
+  }
 }
 
 // ------------------------------------------------- gapless, crossfade, volume
@@ -956,6 +1078,8 @@ const EQ_PRESETS = {
 let graph = null, graphTrying = false;
 const eqGains = () => (prefs.eqPreset === "custom" && Array.isArray(prefs.eqCustom) ? prefs.eqCustom : EQ_PRESETS[prefs.eqPreset] || EQ_PRESETS.flat);
 
+/** The audio engine is needed for the equalizer and the visualizer. */
+const wantGraph = () => prefs.eq || (prefs.visualizer !== "off" && npOpen());
 async function startEqualizer() {
   if (graph || graphTrying || phone) return;
   const src = audio.getAttribute("src");
@@ -967,8 +1091,9 @@ async function startEqualizer() {
   stop.abort(); // the headers were all it needed
   graphTrying = false;
   if (!ok) {
-    setPref("eq", false);
-    setStatus("The equalizer can't be used on this system", 6000);
+    if (prefs.eq) setPref("eq", false);
+    if (prefs.visualizer !== "off") setPref("visualizer", "off");
+    setStatus("The equalizer and visualizer can't be used on this system", 6000);
     return;
   }
   const ctx = new AudioContext();
@@ -979,8 +1104,12 @@ async function startEqualizer() {
     b.Q.value = 1.1;
     return b;
   });
-  filters.reduce((a, b) => (a.connect(b), b)).connect(ctx.destination);
-  graph = { ctx, filters };
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.78;
+  filters.reduce((a, b) => (a.connect(b), b)).connect(analyser);
+  analyser.connect(ctx.destination);
+  graph = { ctx, filters, analyser };
   for (const p of players) {
     // reload with the audio engine's permission, keeping the place and whether it was playing
     const was = p.getAttribute("src");
@@ -998,31 +1127,36 @@ async function startEqualizer() {
   applyEq();
 }
 function applyEq() {
-  if (prefs.eq && !graph) startEqualizer();
+  if (wantGraph() && !graph) startEqualizer();
   if (!graph) return;
   const g = prefs.eq ? eqGains() : EQ_PRESETS.flat;
   graph.filters.forEach((f, i) => (f.gain.value = g[i] || 0));
 }
 onAudio("play", () => {
   graph?.ctx.resume();
-  if (prefs.eq && !graph) startEqualizer();
+  if (wantGraph() && !graph) startEqualizer();
 });
 
 // ------------------------------------------------------------------ events
 
 onAudio("play", () => {
+  if (mediaSession) mediaSession.playbackState = "playing";
+  syncMediaPosition();
   el.playIcon.setAttribute("href", "#i-pause");
   document.body.classList.remove("paused");
   if (scrob.track !== current()) beginScrobble(current());
   discordSync();
 });
 onAudio("pause", () => {
+  if (mediaSession) mediaSession.playbackState = "paused";
+  syncMediaPosition();
   el.playIcon.setAttribute("href", "#i-play");
   document.body.classList.add("paused");
   discordSync();
   saveSession();
 });
 onAudio("seeked", () => {
+  syncMediaPosition();
   scrob.lastTime = audio.currentTime;
   discordSync();
 });
@@ -1035,6 +1169,7 @@ function showDuration() {
   el.dur.textContent = fmtTime(audio.duration);
 }
 onAudio("loadedmetadata", showDuration);
+onAudio("loadedmetadata", syncMediaPosition);
 let seeking = false;
 onAudio("timeupdate", () => {
   trackListening();
@@ -1121,7 +1256,8 @@ function drawWave() {
     const k = Math.min(1, Math.max(0, (since - frac * 250) / 350));
     return Math.max(0.06, wave.peaks[Math.min(wave.peaks.length - 1, Math.floor(frac * wave.peaks.length))] * (1 - (1 - k) ** 3));
   };
-  const unplayed = "rgba(255,255,255,0.2)", hovered = "rgba(255,255,255,0.42)";
+  const fg = lightTheme() ? "0,0,0" : "255,255,255";
+  const unplayed = `rgba(${fg},0.2)`, hovered = `rgba(${fg},0.42)`;
 
   if (prefs.waveStyle === "smooth") {
     // one mirrored shape through evenly spaced points, softened twice with a 3-point average
@@ -1262,6 +1398,9 @@ el.artistList.addEventListener("click", (e) => {
     return;
   }
   if (li.dataset.newPlaylist !== undefined) return newPlaylist();
+  if (li.dataset.newSmart !== undefined) return editSmartList();
+  if (li.dataset.importM3u !== undefined) return importM3u();
+  if (li.dataset.openPage) return openPage(li.dataset.openPage);
   state.artist = li.dataset.key || null;
   state.album = null;
   for (const x of el.artistList.children) x.classList.toggle("sel", x === li);
@@ -1334,41 +1473,116 @@ el.preferTags.addEventListener("change", async () => {
   rescan(true);
 });
 
+// Keyboard shortcuts. The ones in SHORTCUTS can be changed in Settings → Shortcuts (saved as
+// prefs.keys, only the changed ones); Escape, the arrow keys up and down, and Enter can't.
+const SHORTCUTS = [
+  { id: "playPause", label: "Play / pause", keys: "Space", run: togglePlay },
+  { id: "next", label: "Next song", keys: "Ctrl+ArrowRight", run: () => next() },
+  { id: "prev", label: "Previous song", keys: "Ctrl+ArrowLeft", run: () => prev() },
+  { id: "seekFwd", label: "Forward 5 seconds", keys: "ArrowRight", run: () => seekBy(5) },
+  { id: "seekBack", label: "Back 5 seconds", keys: "ArrowLeft", run: () => seekBy(-5) },
+  { id: "volUp", label: "Volume up", keys: "Ctrl+ArrowUp", run: () => nudgeVolume(0.05) },
+  { id: "volDown", label: "Volume down", keys: "Ctrl+ArrowDown", run: () => nudgeVolume(-0.05) },
+  { id: "mute", label: "Mute", keys: "M", run: () => setMuted(!audio.muted) },
+  { id: "like", label: "Favourite the playing song", keys: "L", run: () => $("now-fav").click() },
+  { id: "shuffle", label: "Shuffle", keys: "S", run: cycleShuffle },
+  { id: "repeat", label: "Repeat", keys: "R", run: cycleRepeat },
+  { id: "nowPlaying", label: "Now playing", keys: "N", run: () => current() && showNowPlaying(!npOpen()) },
+  { id: "queue", label: "Queue", keys: "Q", run: () => showQueue(!queueOpen()) },
+  { id: "mini", label: "Mini player", keys: "Ctrl+M", run: () => toggleMini(), desktop: true },
+  { id: "jump", label: "Go to the playing song", keys: "Ctrl+L", run: () => jumpToCurrent(), anywhere: true },
+  { id: "search", label: "Search", keys: "Ctrl+F", run: () => (el.search.focus(), el.search.select()), anywhere: true },
+  { id: "settings", label: "Settings", keys: "Ctrl+,", run: () => (el.settings.hidden ? openSettings() : closeSettings()), anywhere: true },
+  { id: "stats", label: "Listening stats", keys: "Ctrl+I", run: () => openStats(), anywhere: true },
+  { id: "rescan", label: "Rescan the library", keys: "F5", run: () => rescan(false), anywhere: true },
+];
+const MODIFIERS = ["Control", "Meta", "Alt", "Shift", "AltGraph", "CapsLock"];
+
+/** "Ctrl+Shift+K" for a key press (Ctrl means ⌘ on a Mac), or "" for a lone modifier key. */
+function keyCombo(e) {
+  if (MODIFIERS.includes(e.key)) return "";
+  const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  return [e.ctrlKey || e.metaKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.shiftKey && key.length > 1 ? "Shift" : "", key].filter(Boolean).join("+");
+}
+const shortcutKeys = (s) => (prefs.keys && s.id in prefs.keys ? prefs.keys[s.id] : s.keys);
+/** How a key combination is written on this computer. */
+function showCombo(combo) {
+  if (!combo) return "—";
+  const names = { ArrowRight: "→", ArrowLeft: "←", ArrowUp: "↑", ArrowDown: "↓", Ctrl: platform === "mac" ? "⌘" : "Ctrl", Alt: platform === "mac" ? "⌥" : "Alt", Shift: "Shift" };
+  return combo.split("+").map((k) => names[k] || k).join(platform === "mac" ? "" : "+");
+}
+function seekBy(secs) {
+  if (!current() || !isFinite(audio.duration)) return;
+  audio.currentTime = Math.max(0, Math.min(audio.duration - 0.1, audio.currentTime + secs));
+}
+function nudgeVolume(by) {
+  el.volume.value = Math.max(0, Math.min(1, baseVolume + by));
+  el.volume.dispatchEvent(new Event("input"));
+}
+
+let capturing = null; // the Settings → Shortcuts button waiting for a key
 document.addEventListener("keydown", (e) => {
-  const typing = e.target === el.search;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+  if (capturing) return captureKey(e);
+  const typing = e.target === el.search || e.target.matches?.("input:not([type=range]):not([type=checkbox]), textarea, select");
+  const combo = keyCombo(e);
+  const action = combo && SHORTCUTS.find((s) => shortcutKeys(s) === combo && (!s.desktop || !phone));
+  // shortcuts that work while typing need a modifier key, so typing a letter never triggers one
+  if (action && (action.anywhere || !typing) && (!typing || /^(Ctrl|Alt)\+|^F\d/.test(combo))) {
+    if (!action.anywhere && (!el.settings.hidden || !$("editor").hidden || !$("ask").hidden)) return;
     e.preventDefault();
-    el.search.focus();
-    el.search.select();
-  } else if (e.key === "F5") {
-    e.preventDefault();
-    rescan(false);
-  } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
-    e.preventDefault();
-    el.settings.hidden ? openSettings() : closeSettings();
-  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "l") {
-    e.preventDefault();
-    jumpToCurrent();
+    action.run();
   } else if (e.key === "Escape") {
+    if (!$("editor-find-panel").hidden) return ($("editor-find-panel").hidden = true);
     if (!$("editor").hidden) return closeEditor();
     closeSettings();
-    if (typing) el.search.blur();
+    if (typing) e.target.blur();
   } else if (typing || !el.settings.hidden || !$("editor").hidden) {
     return;
-  } else if (e.key === " ") {
-    e.preventDefault();
-    togglePlay();
-  } else if ((e.ctrlKey || e.metaKey) && e.key === "ArrowRight") {
-    next();
-  } else if ((e.ctrlKey || e.metaKey) && e.key === "ArrowLeft") {
-    prev();
-  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+  } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     const n = state.shown.length;
     if (n) selectRow(Math.min(n - 1, Math.max(0, state.selected + (e.key === "ArrowDown" ? 1 : -1))));
   } else if (e.key === "Enter" && state.selected >= 0) {
     playShown(state.selected);
   }
+});
+
+/** Settings → Shortcuts: one row per shortcut, click the key to change it. */
+function renderShortcuts() {
+  $("shortcut-list").innerHTML = SHORTCUTS.filter((s) => !s.desktop || !phone).map((s) =>
+    `<div class="row"><div class="label">${esc(s.label)}</div>` +
+    `<button class="btn key-btn${capturing === s.id ? " capturing" : ""}${shortcutKeys(s) !== s.keys ? " changed" : ""}" data-key="${s.id}">` +
+    `${capturing === s.id ? "Press keys…" : esc(showCombo(shortcutKeys(s)))}</button></div>`).join("");
+}
+function captureKey(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const id = capturing;
+  if (e.key === "Escape") {
+    capturing = null;
+    return renderShortcuts();
+  }
+  const combo = e.key === "Backspace" || e.key === "Delete" ? "" : keyCombo(e);
+  if (combo === "" && MODIFIERS.includes(e.key)) return; // wait for the rest of the combination
+  capturing = null;
+  const keys = { ...(prefs.keys || {}) };
+  // one key does one thing: take it away from whatever had it
+  for (const s of SHORTCUTS) if (combo && s.id !== id && shortcutKeys(s) === combo) keys[s.id] = "";
+  keys[id] = combo;
+  for (const s of SHORTCUTS) if (keys[s.id] === s.keys) delete keys[s.id];
+  setPref("keys", keys);
+  renderShortcuts();
+}
+$("shortcut-list").addEventListener("click", (e) => {
+  const b = e.target.closest(".key-btn");
+  if (!b) return;
+  capturing = capturing === b.dataset.key ? null : b.dataset.key;
+  renderShortcuts();
+});
+$("shortcuts-reset").addEventListener("click", () => {
+  capturing = null;
+  setPref("keys", {});
+  renderShortcuts();
 });
 
 // ------------------------------------------------------------ window chrome
@@ -1382,8 +1596,33 @@ $("win-close").addEventListener("click", () => {
     setStatus(`${slskActive()} Soulseek download${slskActive() === 1 ? " is" : "s are"} still going — closing stops ${slskActive() === 1 ? "it" : "them"}. Click close again to quit.`, 5000);
     return;
   }
+  if (prefs.closeToTray && !quitting) {
+    saveSession();
+    appWindow.hide();
+    if (!prefs.trayHintShown) {
+      setPref("trayHintShown", true);
+      // shown once, as a system notification can't be relied on: the status shows when it's opened again
+      setStatus("yuuricloud kept playing in the tray. Right-click its icon → Quit to close it.", 8000);
+    }
+    return;
+  }
+  quitApp();
+});
+let quitting = false;
+function quitApp() {
+  quitting = true;
   saveSession();
-  invoke("discord_update", { track: null, playing: false, position: 0 }).finally(() => appWindow.close());
+  logListen();
+  invoke("discord_update", { track: null, playing: false, position: 0 })
+    .finally(() => (prefs.closeToTray ? invoke("quit_app") : appWindow.close()));
+}
+
+// the tray icon's menu (lib.rs make_tray)
+listen("tray", ({ payload }) => {
+  if (payload === "playPause") togglePlay();
+  else if (payload === "next") next();
+  else if (payload === "prev") prev();
+  else if (payload === "quit") quitApp();
 });
 
 async function syncMaximized() {
@@ -1396,6 +1635,47 @@ if (!phone) {
   appWindow.onResized(syncMaximized);
   syncMaximized();
 }
+
+// ------------------------------------------------------------- mini player
+// The window shrinks to just the player and stays on top; the same button (or Ctrl+M) makes it
+// big again, at the size it was.
+
+let mini = null; // while small: the size to go back to
+const FULL_MIN = { w: 900, h: 560 }; // keep in sync with minWidth/minHeight in tauri.conf.json
+async function toggleMini(on = !mini) {
+  if (phone || on === !!mini) return;
+  const { LogicalSize } = window.__TAURI__.dpi;
+  const w = appWindow;
+  try {
+    if (on) {
+      mini = { size: await w.innerSize(), max: await w.isMaximized() };
+      showNowPlaying(false);
+      showQueue(false);
+      closeSettings();
+      if (mini.max) await w.unmaximize();
+      document.body.classList.add("mini");
+      await w.setMinSize(new LogicalSize(320, 116));
+      await w.setSize(new LogicalSize(440, 136));
+      await w.setAlwaysOnTop(true);
+    } else {
+      const was = mini;
+      mini = null;
+      document.body.classList.remove("mini");
+      await w.setAlwaysOnTop(prefs.onTop);
+      await w.setSize(was.size);
+      await w.setMinSize(new LogicalSize(FULL_MIN.w, FULL_MIN.h));
+      if (was.max) await w.maximize();
+    }
+  } catch (e) {
+    console.warn("mini player:", e);
+  }
+  $("mini-icon").setAttribute("href", mini ? "#i-expand" : "#i-mini");
+  $("mini-btn").title = mini ? "Back to the full window" : "Mini player";
+  document.querySelector(".player").toggleAttribute("data-tauri-drag-region", !!mini);
+  document.querySelector(".now").toggleAttribute("data-tauri-drag-region", !!mini);
+  kickWave();
+}
+$("mini-btn").addEventListener("click", () => toggleMini());
 
 // ---------------------------------------------------------- resume session
 
@@ -1459,6 +1739,7 @@ function restoreSession() {
 const trackInfo = (t) => ({
   title: t.title, artist: t.artist, album: t.album, albumArtist: t.albumArtist, duration: t.duration,
   image: t.sc && t.cover ? t.cover : null,
+  url: t.sc && t.permalinkUrl ? t.permalinkUrl.split("?")[0] : null,
 });
 const scrob = { track: null, startedAt: 0, listened: 0, lastTime: 0, done: false };
 
@@ -1467,7 +1748,18 @@ function lastfmEnabled() {
   return lf && lf.scrobble && lf.sessionKey;
 }
 
+/** Put the song that was playing into the listening history (Stats), if it played a while. */
+function logListen() {
+  const t = scrob.track;
+  if (!t || scrob.listened < 10 || scrob.logged) return;
+  scrob.logged = true;
+  const listen = { at: scrob.startedAt, secs: Math.round(scrob.listened), path: t.path, title: t.title, artist: t.artist, album: t.album || "", sc: !!t.sc };
+  invoke("log_listen", { listen }).then(() => stats.history?.push(listen), () => {});
+}
+
 function beginScrobble(t) {
+  logListen();
+  scrob.logged = false;
   Object.assign(scrob, { track: t, startedAt: Math.floor(Date.now() / 1000), listened: 0, lastTime: audio.currentTime, done: false });
   if (t && lastfmEnabled()) invoke("lastfm_now_playing", { track: trackInfo(t) }).catch(() => {});
 }
@@ -1678,9 +1970,25 @@ function applyAppIcon() {
   invoke("set_app_icon", { name }).catch(() => {});
 }
 
+const systemLight = matchMedia("(prefers-color-scheme: light)");
+const lightTheme = () => prefs.theme === "light" || (prefs.theme === "system" && systemLight.matches);
+systemLight.addEventListener("change", () => prefs.theme === "system" && applyTheme());
+let themeApplied = null;
+/** Light or dark: the page's colors, and the window's own (the blur behind it, on Windows and macOS). */
+function applyTheme() {
+  const light = lightTheme();
+  document.documentElement.classList.toggle("light", light);
+  if (!phone && themeApplied !== prefs.theme) {
+    themeApplied = prefs.theme;
+    appWindow.setTheme?.(prefs.theme === "system" ? null : prefs.theme).catch(() => {});
+  }
+  kickWave();
+}
+
 function applyPrefs() {
   const root = document.documentElement.style;
   const body = document.body.classList;
+  applyTheme();
   updateAccent();
   body.toggle("cover-tint", prefs.coverTint);
   applyAppIcon();
@@ -1748,6 +2056,7 @@ $("eq-bands").addEventListener("input", (e) => {
 });
 
 function syncSettingsUI() {
+  renderShortcuts();
   for (const input of el.settings.querySelectorAll("input[data-pref]")) {
     const value = prefs[input.dataset.pref];
     if (input.type === "checkbox") {
@@ -1779,6 +2088,7 @@ function openSettings() {
 
 function closeSettings() {
   if (el.settings.hidden) return;
+  capturing = null;
   // closing during the setup guide counts as skipping the rest of it
   const hidden = () => {
     el.settings.hidden = true;
@@ -2303,9 +2613,16 @@ function applyInterfaceSize() {
 /** Show a menu at (x, y). `items` are { label, icon, on, disabled, action } or "-" for a divider. */
 function openMenu(x, y, title, items) {
   ctx.innerHTML = `<div class="title">${esc(title)}</div>` + items.map((it, i) => it === "-" ? "<hr>"
+    : it.stars != null ? `<div class="menu-stars" data-i="${i}">${[1, 2, 3, 4, 5].map((n) => `<button data-star="${n}" class="${n <= it.stars ? "on" : ""}" title="${n} star${n > 1 ? "s" : ""}">★</button>`).join("")}</div>`
     : `<button data-i="${i}"${it.disabled ? " disabled" : ""}><svg class="${it.on ? "on" : ""}" viewBox="0 0 24 24"><use href="#${it.icon}"/></svg>${esc(it.label)}</button>`).join("");
   ctx.hidden = false;
   ctx.onclick = (e) => {
+    const star = e.target.closest("[data-star]");
+    if (star) {
+      const it = items[star.parentElement.dataset.i], n = Number(star.dataset.star);
+      closeMenu();
+      return it.action(n === it.stars ? 0 : n);
+    }
     const b = e.target.closest("button[data-i]");
     if (!b) return;
     closeMenu();
@@ -2365,7 +2682,8 @@ function songMenu(t, i) {
         { label: "Move down", icon: "i-to-top", disabled: at < 0 || at >= pl.songs.length - 1, action: () => movePlaylistSong(pl, at, at + 1) },
       );
     }
-    items.push("-", { label: "Edit song info…", icon: "i-edit", action: () => openEditor(t) });
+    items.push("-", { label: "Start radio", icon: "i-random", action: () => startRadio(t) }, { stars: rating(t), action: (n) => setRating(t, n) },
+      "-", { label: "Edit song info…", icon: "i-edit", action: () => openEditor(t) });
   }
   return items;
 }
@@ -2397,6 +2715,146 @@ function playNext(t) {
   if (t.sc) prefetchNext();
   renderQueue();
   saveSession();
+}
+
+// ------------------------------------------------------------- rename files
+// Name song files from their info: "{track} - {title}" → "03 - Roygbiv.flac".
+
+const renaming = { tracks: [], plan: [] };
+const fileStem = (p) => baseName(p).replace(/\.[^.]+$/, "");
+function renameTo(t, pattern) {
+  const pad = (n) => (n ? String(n).padStart(2, "0") : "");
+  const fields = { track: pad(t.trackNo), disc: t.discNo || 1, title: t.title, artist: t.artist, album: t.album, albumartist: t.albumArtist, year: t.year };
+  return pattern.replace(/\{(\w+)\}/g, (m, k) => fields[k.toLowerCase()] ?? m)
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/^[\s\-.]+|[\s.]+$/g, "").replace(/\s{2,}/g, " ").slice(0, 180);
+}
+function openRename(tracks) {
+  closeMenu();
+  renaming.tracks = [...tracks].sort(cmpTracks);
+  $("rename-pattern").value = prefs.renamePattern || "{track} - {title}";
+  $("rename-preset").value = "";
+  $("rename").hidden = false;
+  renderRename();
+  $("rename-pattern").focus();
+}
+function renderRename() {
+  const pattern = $("rename-pattern").value;
+  const seen = new Map();
+  renaming.plan = renaming.tracks.map((t) => {
+    const name = renameTo(t, pattern);
+    const key = (parentDir(t.path) + "/" + name + "." + fileFormat(t)).toLowerCase();
+    seen.set(key, (seen.get(key) || 0) + 1);
+    return { t, name, key };
+  });
+  let changes = 0, clashes = 0;
+  $("rename-list").innerHTML = renaming.plan.map(({ t, name, key }) => {
+    const same = name === fileStem(t.path), clash = !name || seen.get(key) > 1;
+    if (clash) clashes++;
+    else if (!same) changes++;
+    return `<div class="rename-item${same ? " same" : ""}${clash ? " clash" : ""}"><span class="old" title="${esc(t.path)}">${esc(baseName(t.path))}</span><span class="arrow">→</span>` +
+      `<span class="new">${esc(name ? `${name}.${fileFormat(t)}` : "(empty)")}</span></div>`;
+  }).join("");
+  $("rename-note").textContent = clashes ? `${countOf(clashes, "file")} would get the same name — add {track} or {disc}` : changes ? `${countOf(changes, "file")} to rename` : "Nothing to change";
+  $("rename-ok").disabled = !!clashes || !changes;
+}
+$("rename-pattern").addEventListener("input", renderRename);
+$("rename-preset").addEventListener("change", (e) => {
+  if (!e.target.value) return;
+  $("rename-pattern").value = e.target.value;
+  e.target.value = "";
+  renderRename();
+});
+$("rename-cancel").addEventListener("click", () => ($("rename").hidden = true));
+$("rename").addEventListener("mousedown", (e) => e.target === $("rename") && ($("rename").hidden = true));
+$("rename").addEventListener("keydown", (e) => e.key === "Escape" && ($("rename").hidden = true));
+$("rename-ok").addEventListener("click", async () => {
+  const renames = renaming.plan.filter(({ t, name }) => name && name !== fileStem(t.path)).map(({ t, name }) => ({ path: t.path, name }));
+  if (!renames.length) return;
+  setPref("renamePattern", $("rename-pattern").value);
+  $("rename-ok").disabled = true;
+  const playing = current();
+  const resume = releasePlaying(renames.map((r) => r.path));
+  let r;
+  try {
+    r = await invoke("rename_songs", { renames });
+  } catch (e) {
+    $("rename-note").textContent = String(e);
+    $("rename-ok").disabled = false;
+    return resume();
+  }
+  $("rename").hidden = true;
+  // the songs now live at their new paths: follow them everywhere the app holds a path
+  const moved = new Map(r.moved);
+  for (const t of [...state.tracks, ...state.queue]) if (moved.has(t.path)) t.path = moved.get(t.path);
+  state.favorites = new Set(r.settings.favorites || []);
+  state.playlists = r.settings.playlists || [];
+  plSets.clear();
+  for (const [a, b] of moved) if (state.stats[a]) (state.stats[b] = state.stats[a]), delete state.stats[a];
+  if (playing && moved.has(playing.path ?? "")) playing.path = moved.get(playing.path);
+  resume();
+  setStatus(r.failed.length ? `Renamed ${r.moved.length}; ${r.failed.length} couldn't be: ${r.failed[0]}` : `Renamed ${countOf(r.moved.length, "file")}`, 6000);
+  await rescan(false);
+});
+
+// --------------------------------------------------------------- song radio
+// Endless play from one song or artist: their songs, and songs by similar artists in the library
+// (Last.fm's similar artists, or the same genre when Last.fm doesn't know them).
+
+const radio = { on: false, pool: [], recent: [], name: "" };
+
+async function startRadio(seed) {
+  if (!seed || seed.sc) return;
+  closeMenu();
+  setStatus(`Starting ${seed.albumArtist} radio…`);
+  const byArtist = new Map();
+  for (const t of state.tracks) {
+    const k = artistKey(t);
+    if (!byArtist.has(k)) byArtist.set(k, []);
+    byArtist.get(k).push(t);
+  }
+  const weights = new Map([[artistKey(seed), 4]]);
+  try {
+    const about = await invoke("about", { artist: seed.albumArtist, album: null });
+    about.similar.forEach((n, i) => byArtist.has(n.toLowerCase()) && weights.set(n.toLowerCase(), Math.max(1, 3 - i / 4)));
+  } catch {}
+  if (weights.size < 3 && seed.genre) {
+    for (const t of state.tracks) if (t.genre === seed.genre && !weights.has(artistKey(t))) weights.set(artistKey(t), 1);
+  }
+  radio.pool = [...weights].flatMap(([k, w]) => (byArtist.get(k) || []).map((t) => ({ t, w })));
+  radio.recent = [seed.path];
+  radio.name = seed.albumArtist;
+  const first = [seed, ...radioPicks(9, seed)];
+  playTracks(first, 0, true);
+  radio.on = true;
+  radio.queue = state.queue;
+  setStatus(`${seed.albumArtist} radio · ${countOf(new Set(radio.pool.map((x) => artistKey(x.t))).size, "artist")}`, 4000);
+}
+
+/** `n` more songs: weighted by artist, no song again within 40, no artist twice in a row. */
+function radioPicks(n, last) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const prevArtist = artistKey(out[out.length - 1] || last || { albumArtist: "" });
+    let options = radio.pool.filter((x) => !radio.recent.includes(x.t.path) && artistKey(x.t) !== prevArtist);
+    if (!options.length) options = radio.pool.filter((x) => !radio.recent.slice(-5).includes(x.t.path));
+    if (!options.length) break;
+    let r = Math.random() * options.reduce((s, x) => s + x.w, 0);
+    const pick = options.find((x) => (r -= x.w) <= 0) || options[options.length - 1];
+    out.push(pick.t);
+    radio.recent.push(pick.t.path);
+    if (radio.recent.length > 40) radio.recent.shift();
+  }
+  return out;
+}
+
+/** Near the end of a radio queue, add more. */
+function radioTopUp() {
+  if (!radio.on || state.queue !== radio.queue || state.pos < state.order.length - 3) return;
+  for (const t of radioPicks(10, state.queue[state.order[state.order.length - 1]])) {
+    state.queue.push(t);
+    state.order.push(state.queue.length - 1);
+  }
+  renderQueue();
 }
 
 // ---------------------------------------------------------------- playlists
@@ -2461,6 +2919,35 @@ async function newPlaylist(tracks = []) {
   setStatus(`Made the playlist “${name}”`, 2500);
 }
 
+// .m3u files, for other players
+async function exportM3u(name, tracks) {
+  const songs = tracks.filter((t) => !t.sc).map((t) => ({ path: t.path, title: t.title, artist: t.artist, duration: t.duration || 0 }));
+  if (!songs.length) return setStatus("Nothing to save", 3000);
+  try {
+    const where = await invoke("export_m3u", { name, songs });
+    if (where) setStatus(`Saved ${countOf(songs.length, "song")} to ${where}`, 5000);
+  } catch (e) {
+    setStatus(String(e), 5000);
+  }
+}
+async function importM3u() {
+  let r;
+  try {
+    r = await invoke("import_m3u");
+  } catch (e) {
+    return setStatus(String(e), 5000);
+  }
+  if (!r) return;
+  if (!r.songs.length) return setStatus(`None of the ${countOf(r.missing, "song")} in “${r.name}” are in your library`, 6000);
+  const p = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: r.name, songs: r.songs };
+  state.playlists.push(p);
+  await savePlaylists();
+  state.artist = PL_PREFIX + p.id;
+  renderArtists();
+  showPane("songs");
+  setStatus(`Made “${r.name}” with ${countOf(r.songs.length, "song")}` + (r.missing ? ` · ${r.missing} weren't found in your library` : ""), 6000);
+}
+
 async function addToPlaylist(p, tracks, say = true) {
   const have = plSet(p);
   const added = tracks.filter((t) => !have.has(t.path));
@@ -2518,6 +3005,9 @@ el.albumGrid.addEventListener("contextmenu", (e) => {
     { label: "Album page", icon: "i-grid", action: () => openPage("album", state.albumKeys[card.dataset.i]) },
     "-",
     ...playlistMenu(tracks),
+    "-",
+    { label: "Edit album info…", icon: "i-edit", action: () => openAlbumEditor(tracks) },
+    { label: "Rename files…", icon: "i-edit", action: () => openRename(tracks) },
   ]);
 });
 
@@ -2534,10 +3024,251 @@ el.artistList.addEventListener("contextmenu", (e) => {
     showPane("songs");
     playShown(0);
   } };
-  const p = playlistOf(key);
+  const p = playlistOf(key), smart = smartOf(key);
+  const exportM3u = { label: "Save as .m3u…", icon: "i-download", action: () => exportM3u(li.title, songs()) };
   openMenu(e.clientX, e.clientY, li.title, p
-    ? [play, "-", { label: "Rename…", icon: "i-edit", action: () => renamePlaylist(p) }, { label: "Delete playlist…", icon: "i-stop", action: () => deletePlaylist(p) }]
-    : [play, ...(specialList(key) ? [] : [{ label: "Artist page", icon: "i-note", action: () => openPage("artist", key) }]), "-", ...playlistMenu(songs())]);
+    ? [play, "-", { label: "Rename…", icon: "i-edit", action: () => renamePlaylist(p) }, ...(phone ? [] : [exportM3u]), { label: "Delete playlist…", icon: "i-stop", action: () => deletePlaylist(p) }]
+    : smart?.custom
+    ? [play, "-", { label: "Change…", icon: "i-edit", action: () => editSmartList(smart) }, ...(phone ? [] : [exportM3u]), { label: "Delete smart list", icon: "i-stop", action: () => deleteSmartList(smart) }]
+    : [play, ...(specialList(key) ? [] : [{ label: "Artist page", icon: "i-note", action: () => openPage("artist", key) }, { label: "Start radio", icon: "i-random", action: () => startRadio(songs()[0]) }]),
+      "-", ...playlistMenu(songs())]);
+});
+
+/** Make a smart list from a search (or change one): any search the search box takes. */
+async function editSmartList(old) {
+  const query = await ask({
+    title: old ? `Change “${old.name}”` : "New smart list",
+    text: "The songs that match a search, kept up to date. For example: genre:jazz plays:0 · year:1990-1999 rating>=4 · added<30 flac · artist:\"Boards of Canada\" -live",
+    value: old?.query ?? el.search.value.trim(), ok: "Next",
+  });
+  if (!query?.trim()) return;
+  const name = await ask({ title: "Name it", value: old?.name ?? query.trim(), ok: old ? "Save" : "Create" });
+  if (!name?.trim()) return;
+  const lists = [...(prefs.smartLists || [])];
+  if (old) lists[lists.findIndex((c) => c.id === old.id)] = { id: old.id, name: name.trim(), query: query.trim() };
+  else lists.push({ id: "c" + Date.now().toString(36), name: name.trim(), query: query.trim() });
+  setPref("smartLists", lists);
+  if (!old) state.artist = SMART_PREFIX + lists[lists.length - 1].id;
+  renderArtists();
+  showPane("songs");
+}
+async function deleteSmartList(smart) {
+  if (!(await ask({ title: `Delete “${smart.name}”?`, text: "The songs stay in your library.", ok: "Delete", danger: true }))) return;
+  setPref("smartLists", (prefs.smartLists || []).filter((c) => c.id !== smart.id));
+  if (state.artist === SMART_PREFIX + smart.id) state.artist = null;
+  renderArtists();
+}
+
+async function setRating(t, n) {
+  if (!t || t.sc) return;
+  try {
+    state.stats[t.path] = await invoke("set_rating", { path: t.path, rating: n });
+  } catch (e) {
+    return setStatus(String(e), 4000);
+  }
+  smartLists.clear();
+  smartSets.clear();
+  if (current()?.path === t.path) renderNowStars();
+  setStatus(n ? `Rated ${t.title} ${"★".repeat(n)}` : `Took the rating off ${t.title}`, 2500);
+}
+// ------------------------------------------- now playing: speed, A–B loop, visualizer
+
+const SPEEDS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2];
+let speed = 1;
+function setSpeed(x) {
+  speed = x;
+  for (const p of players) {
+    p.defaultPlaybackRate = p.playbackRate = x; // the default survives loading the next song
+    p.preservesPitch = p.webkitPreservesPitch = prefs.keepPitch !== false;
+  }
+  renderNpTools();
+  syncMediaPosition();
+}
+
+const ab = { a: null, b: null, path: null };
+function cycleLoop() {
+  const t = current();
+  if (!t) return;
+  if (ab.path !== t.path || (ab.a != null && ab.b != null)) Object.assign(ab, { a: null, b: null, path: t.path });
+  if (ab.a == null) ab.a = audio.currentTime;
+  else if (audio.currentTime > ab.a + 0.5) ab.b = audio.currentTime;
+  else ab.a = audio.currentTime; // B must come after A: move A instead
+  renderNpTools();
+}
+function clearLoop() {
+  Object.assign(ab, { a: null, b: null, path: null });
+  renderNpTools();
+}
+onAudio("timeupdate", () => {
+  if (ab.b != null && ab.path === current()?.path && audio.currentTime >= ab.b) audio.currentTime = ab.a;
+});
+
+function renderNpTools() {
+  const t = current();
+  const looping = ab.path === t?.path && ab.a != null;
+  $("np-speed").textContent = `${speed}×`;
+  $("np-speed").classList.toggle("on", speed !== 1);
+  $("np-loop").textContent = !looping ? "A–B loop" : ab.b == null ? `A ${fmtTime(ab.a)} → set B` : `${fmtTime(ab.a)} – ${fmtTime(ab.b)}`;
+  $("np-loop").classList.toggle("on", looping);
+  $("np-loop-clear").hidden = !looping;
+  $("np-vis-btn").textContent = { off: "Visualizer: off", bars: "Visualizer: bars", wave: "Visualizer: wave" }[prefs.visualizer] || "Visualizer: off";
+  $("np-vis-btn").classList.toggle("on", prefs.visualizer !== "off");
+  $("np-lyr-edit").hidden = !t || !!t.sc;
+}
+$("np-speed").addEventListener("click", (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  openMenu(r.left, r.bottom + 4, "Speed", [
+    ...SPEEDS.map((x) => ({ label: `${x}×${x === 1 ? " (normal)" : ""}`, icon: x === speed ? "i-check" : "i-blank", action: () => setSpeed(x) })),
+    "-",
+    { label: "Keep the pitch", icon: prefs.keepPitch !== false ? "i-check" : "i-blank", action: () => (setPref("keepPitch", prefs.keepPitch === false), setSpeed(speed)) },
+  ]);
+});
+$("np-loop").addEventListener("click", cycleLoop);
+$("np-loop-clear").addEventListener("click", clearLoop);
+$("np-vis-btn").addEventListener("click", () => {
+  const order = ["off", "bars", "wave"];
+  setPref("visualizer", order[(order.indexOf(prefs.visualizer) + 1) % order.length]);
+  applyEq();
+  renderNpTools();
+  drawVisualizer();
+});
+
+let visFrame = 0;
+function drawVisualizer() {
+  cancelAnimationFrame(visFrame);
+  const c = $("np-vis");
+  const on = npOpen() && prefs.visualizer !== "off" && graph?.analyser;
+  c.hidden = !on;
+  if (!on) return;
+  const g = c.getContext("2d"), an = graph.analyser;
+  const freq = new Uint8Array(an.frequencyBinCount), wave = new Uint8Array(an.fftSize);
+  const frame = () => {
+    if (!npOpen() || prefs.visualizer === "off") return (c.hidden = true);
+    const dpr = devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+    if (c.width !== Math.round(w * dpr)) [c.width, c.height] = [Math.round(w * dpr), Math.round(h * dpr)];
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const color = getComputedStyle(document.documentElement).getPropertyValue("--accent-base").trim() || "#8b7cff";
+    g.fillStyle = g.strokeStyle = color;
+    if (prefs.visualizer === "bars") {
+      an.getByteFrequencyData(freq);
+      const n = Math.max(16, Math.min(96, Math.floor(w / 9))), gap = 2, bw = w / n - gap;
+      const maxBin = Math.floor(freq.length * 0.75); // above ~16 kHz there's little to see
+      for (let i = 0; i < n; i++) {
+        // log-spaced, so the bass doesn't take a single bar
+        const from = Math.floor(Math.pow(maxBin, i / n)), to = Math.max(from + 1, Math.floor(Math.pow(maxBin, (i + 1) / n)));
+        let v = 0;
+        for (let j = from; j < to; j++) v = Math.max(v, freq[j]);
+        const bh = Math.max(2, (v / 255) ** 1.4 * h);
+        g.globalAlpha = 0.35 + 0.55 * (v / 255);
+        g.beginPath();
+        g.roundRect(i * (bw + gap), h - bh, bw, bh, [Math.min(4, bw / 2), Math.min(4, bw / 2), 0, 0]);
+        g.fill();
+      }
+    } else {
+      an.getByteTimeDomainData(wave);
+      g.globalAlpha = 0.8;
+      g.lineWidth = 2;
+      g.beginPath();
+      for (let i = 0; i < wave.length; i += 4) {
+        const x = (i / (wave.length - 1)) * w, y = h / 2 + ((wave[i] - 128) / 128) * (h / 2) * 0.9;
+        i ? g.lineTo(x, y) : g.moveTo(x, y);
+      }
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    visFrame = requestAnimationFrame(frame);
+  };
+  frame();
+}
+
+function renderNowStars() {
+  const t = current();
+  $("np-stars").hidden = !t || !!t.sc;
+  if (!t || t.sc) return;
+  const r = rating(t);
+  $("np-stars").innerHTML = [1, 2, 3, 4, 5].map((n) => `<button data-star="${n}" class="${n <= r ? "on" : ""}" title="${n} star${n > 1 ? "s" : ""}">★</button>`).join("");
+}
+$("np-stars").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-star]");
+  if (b) setRating(current(), Number(b.dataset.star) === rating(current()) ? 0 : Number(b.dataset.star));
+});
+
+/** Use a search, as if typed in the search box. */
+function searchFor(q) {
+  if (state.source !== "local") setSource("local");
+  el.search.value = q;
+  state.query = q.toLowerCase();
+  applySearch();
+  showPage(false);
+}
+
+/** Browse the library by its folders: `dir` is a folder in it, or empty for the top. */
+function renderFoldersPage(dir) {
+  const body = $("page-body");
+  body.dataset.all = "folders";
+  const roots = [...new Set(state.tracks.map((t) => t.root))].sort(collator.compare);
+  if (!dir && roots.length === 1) dir = roots[0];
+  const under = (t) => dir && t.path.length > dir.length && t.path.startsWith(dir) && /[\\/]/.test(t.path[dir.length]);
+  const inside = dir ? state.tracks.filter(under) : state.tracks;
+  const folders = new Map(); // folder path -> songs under it
+  const here = [];
+  for (const t of inside) {
+    if (!dir) {
+      if (!folders.has(t.root)) folders.set(t.root, 0);
+      folders.set(t.root, folders.get(t.root) + 1);
+      continue;
+    }
+    const rest = t.path.slice(dir.length + 1), cut = rest.search(/[\\/]/);
+    if (cut < 0) here.push(t);
+    else {
+      const sub = dir + t.path[dir.length] + rest.slice(0, cut);
+      folders.set(sub, (folders.get(sub) || 0) + 1);
+    }
+  }
+  here.sort((a, b) => collator.compare(baseName(a.path), baseName(b.path)));
+  pageSongs = here;
+  pageAll = [...inside].sort((a, b) => collator.compare(a.path, b.path));
+  pageAlbums = [];
+  const name = dir ? baseName(dir) : "Folders";
+  const subs = [...folders].sort((a, b) => collator.compare(a[0], b[0]));
+  body.innerHTML =
+    `<h1 class="page-h1">${esc(name)}</h1>` +
+    (dir ? `<div class="hint path" title="${esc(dir)}">${esc(dir)}</div>` : "") +
+    `<div class="page-actions"><button class="btn accent" data-act="play">Play all</button><button class="btn" data-act="shuffle">Shuffle</button>` +
+    (dir && !phone ? `<button class="btn" data-folder-reveal>Open folder</button>` : "") + `</div>` +
+    (subs.length ? `<div class="folder-rows">${subs.map(([f, n]) =>
+      `<button class="folder-row" data-folder="${esc(f)}"><svg viewBox="0 0 24 24"><use href="#i-folder" /></svg><span>${esc(dir ? baseName(f) : f)}</span><small>${countOf(n, "song")}</small></button>`).join("")}</div>` : "") +
+    (here.length ? `<div class="page-songs">${here.map((t, i) => pageSongRow(t, i, i + 1)).join("")}</div>` : "") +
+    (!subs.length && !here.length ? `<p class="stat-empty">No songs here.</p>` : "");
+  body.dataset.dir = dir || "";
+}
+$("page-body").addEventListener("click", (e) => {
+  const f = e.target.closest("[data-folder]");
+  if (f) return openPage("folders", f.dataset.folder);
+  if (e.target.closest("[data-folder-reveal]")) {
+    const t = pageAll[0];
+    if (t) invoke("reveal_file", { path: t.path }).catch((err) => setStatus(String(err), 4000));
+  }
+});
+
+function renderGenresPage() {
+  const body = $("page-body");
+  body.dataset.all = "genres";
+  const counts = new Map();
+  for (const t of state.tracks) if (t.genre) counts.set(t.genre, (counts.get(t.genre) || 0) + 1);
+  const genres = [...counts].sort((a, b) => b[1] - a[1] || collator.compare(a[0], b[0]));
+  const without = state.tracks.filter((t) => !t.genre).length;
+  body.innerHTML = `<h1 class="page-h1">Genres</h1>` + (genres.length
+    ? `<div class="genre-tiles">${genres.map(([g, n]) => `<button class="genre-tile" data-genre="${esc(g)}"><span>${esc(g)}</span><small>${countOf(n, "song")}</small></button>`).join("")}</div>` +
+      (without ? `<p class="hint">${countOf(without, "song")} ${without === 1 ? "has" : "have"} no genre. <a href="#" data-genre="">Show them</a> — right-click an album → Edit album info to add one.</p>` : "")
+    : `<p class="stat-empty">None of your songs have a genre in their tags yet. Right-click an album → Edit album info… to add one.</p>`);
+}
+$("page-body").addEventListener("click", (e) => {
+  const g = e.target.closest("[data-genre]");
+  if (!g) return;
+  e.preventDefault();
+  searchFor(g.dataset.genre ? `genre:"${g.dataset.genre}"` : `-genre:""`);
 });
 
 // ------------------------------------------------------ phone & computer
@@ -2556,6 +3287,7 @@ function renderPcSettings() {
     $("pc-unlink").hidden = !pc.address;
     $("pc-pair").hidden = !!pc.address;
     $("pc-actions").hidden = !pc.address;
+    $("pc-favs-row").hidden = !pc.address;
     $("remote-btn").hidden = !pc.address;
     document.body.classList.toggle("paired", !!pc.address);
     return;
@@ -2586,13 +3318,29 @@ function reportNow() {
   invoke("remote_report", { now: t ? {
     path: t.path, title: t.title, artist: t.artist, album: t.album || "", cover: t.sc ? t.cover : "",
     playing: !audio.paused, position: audio.currentTime || 0, duration: audio.duration || t.duration || 0, volume: baseVolume,
+    queue: remoteQueue(),
   } : {} }).catch(() => {});
+}
+/** The queue for the phone's remote: a few songs that played, the one playing and what's next. */
+function remoteQueue() {
+  const from = Math.max(0, state.pos - 3), to = Math.min(state.order.length, state.pos + 41);
+  const items = [];
+  for (let i = from; i < to; i++) {
+    const t = state.queue[state.order[i]];
+    if (t) items.push({ at: i, title: t.title, artist: t.artist });
+  }
+  return { pos: state.pos, total: state.order.length, items };
 }
 listen("remote-command", ({ payload: { command, value } }) => {
   if (command === "toggle") togglePlay();
   if (command === "next") next();
   if (command === "prev") prev();
   if (command === "seek" && value != null && current()) audio.currentTime = value;
+  // a song in the queue, by its place in the playing order
+  if (command === "jump" && value != null && value >= 0 && value < state.order.length && value !== state.pos) {
+    state.pos = value;
+    playCurrent();
+  }
   if (command === "volume" && value != null) {
     baseVolume = Math.min(1, Math.max(0, value));
     el.volume.value = baseVolume;
@@ -2631,10 +3379,30 @@ listen("computer-linked", ({ payload }) => {
 // Phone: copying music from the computer
 const copy = { library: null, picks: new Map(), busy: false }; // picks: key -> songs
 const fmtSize = (n) => fmtBytes(n);
+// The full-window views (a library page, copying music, the remote, now playing, downloads) take
+// turns: opening one closes the others, so they never show on top of each other.
+function closeViewsExcept(keep) {
+  if (keep !== "page" && pageOpen()) showPage(false);
+  if (keep !== "copy" && !$("copy").hidden) showCopy(false);
+  if (keep !== "remote" && !$("remote").hidden) showRemote(false);
+  if (keep !== "np" && npOpen()) showNowPlaying(false);
+  if (keep !== "downloads" && !$("downloads").hidden) showDownloads(false);
+}
+/** The body classes that hide the library behind whichever view is open. */
+function syncViewClasses() {
+  const open = (id) => !$(id).hidden;
+  document.body.classList.toggle("show-page", open("page") || open("copy") || open("remote"));
+  document.body.classList.toggle("show-np", open("np"));
+  document.body.classList.toggle("show-downloads", open("downloads"));
+}
+
 function showCopy(open) {
+  if (open) closeViewsExcept("copy");
+  const wasOpen = !$("copy").hidden;
   $("copy").hidden = !open;
-  document.body.classList.toggle("show-page", open);
-  if (open) loadCopyList();
+  syncViewClasses();
+  // a copy still going keeps its list: it's what's being copied
+  if (open && !wasOpen && !copy.busy) loadCopyList();
 }
 $("pc-copy").addEventListener("click", () => {
   closeSettings();
@@ -2700,8 +3468,10 @@ $("copy-go").addEventListener("click", async () => {
   let summary = "";
   try {
     if (songs.length) {
-      const r = await invoke("computer_copy", { songs });
-      summary = `Copied ${countOf(r.copied, "song")}` + (r.skipped ? `, ${r.skipped} already here` : "") + (r.failed ? `, ${r.failed} failed` : "");
+      const r = await invoke("computer_copy", { songs, favorites: copy.library?.favorites || [] });
+      summary = `Copied ${countOf(r.copied, "song")}` + (r.skipped ? `, ${r.skipped} already on this phone` : "") + (r.failed ? `, ${r.failed} failed` : "") +
+        (r.favoritedHere ? `. ${countOf(r.favoritedHere, "favourite")} from ${state.settings.computer?.name || "the computer"} marked here` : "") +
+        (r.favoritedThere ? `. ${countOf(r.favoritedThere, "favourite")} from this phone marked on ${state.settings.computer?.name || "the computer"}` : "");
       await refreshAutoFolders();
       await rescan(false);
     }
@@ -2733,8 +3503,9 @@ listen("copy-progress", ({ payload: p }) => {
 // Phone: the remote
 let remoteTimer = null, remoteCover = { id: null, url: "" }, remoteSeeking = false;
 function showRemote(open) {
+  if (open) closeViewsExcept("remote");
   $("remote").hidden = !open;
-  document.body.classList.toggle("show-page", open);
+  syncViewClasses();
   clearInterval(remoteTimer);
   if (open) {
     $("remote-from").textContent = state.settings.computer.name;
@@ -2742,12 +3513,35 @@ function showRemote(open) {
     remoteTimer = setInterval(pollRemote, 1000);
   }
 }
+$("pc-favs").addEventListener("click", async () => {
+  const b = $("pc-favs"), status = $("pc-favs-status"), name = state.settings.computer?.name || "the computer";
+  b.disabled = true;
+  status.className = "hint";
+  status.textContent = `Comparing with ${name}…`;
+  try {
+    const r = await invoke("computer_sync_favorites");
+    state.favorites = new Set(r.favorites);
+    state.settings.favorites = r.favorites;
+    applySearch();
+    renderNowFav();
+    status.className = "hint ok";
+    status.textContent = !r.shared ? `This phone and ${name} have no songs in common yet.`
+      : !r.favoritedHere && !r.favoritedThere ? `Already in sync: ${countOf(r.shared, "song")} on both.`
+      : [r.favoritedHere && `${countOf(r.favoritedHere, "favourite")} from ${name} marked here`, r.favoritedThere && `${countOf(r.favoritedThere, "favourite")} from this phone marked on ${name}`].filter(Boolean).join(" · ") + ".";
+  } catch (e) {
+    status.className = "hint err";
+    status.textContent = String(e);
+  }
+  b.disabled = false;
+});
 $("pc-remote").addEventListener("click", () => {
   closeSettings();
   showRemote(true);
 });
 $("remote-btn").addEventListener("click", () => showRemote($("remote").hidden));
 $("remote-close").addEventListener("click", () => showRemote(false));
+// the queue starts closed every time the remote opens
+new MutationObserver(() => $("remote").hidden && !$("remote-queue").hidden && showRemoteQueue(false)).observe($("remote"), { attributes: true, attributeFilter: ["hidden"] });
 async function pollRemote() {
   let now;
   try {
@@ -2767,6 +3561,8 @@ async function pollRemote() {
   }
   $("remote-pos").textContent = fmtTime(now.position);
   $("remote-dur").textContent = fmtTime(now.duration);
+  remoteNow = now;
+  renderRemoteQueue();
   if (document.activeElement !== $("remote-volume")) {
     $("remote-volume").value = now.volume ?? 0.7;
     setRangeFill($("remote-volume"));
@@ -2780,6 +3576,45 @@ async function pollRemote() {
     $("remote-bg").innerHTML = remoteCover.url ? `<img src="${esc(remoteCover.url)}" alt="">` : "";
   }
 }
+// the computer's queue, on the phone
+let remoteNow = null, remoteQueueShown = "";
+function renderRemoteQueue() {
+  if ($("remote-queue").hidden) return;
+  const q = remoteNow?.queue;
+  if (!q?.items?.length) {
+    $("remote-queue-sub").textContent = "";
+    $("remote-queue-list").innerHTML = `<p class="hint queue-empty">Nothing queued on the computer.</p>`;
+    remoteQueueShown = "";
+    return;
+  }
+  const ahead = q.total - q.pos - 1;
+  $("remote-queue-sub").textContent = ahead ? `${countOf(ahead, "song")} up next` : "Last song";
+  const key = JSON.stringify(q);
+  if (key === remoteQueueShown) return; // unchanged: leave the list (and where it's scrolled) alone
+  const first = remoteQueueShown === "";
+  remoteQueueShown = key;
+  $("remote-queue-list").innerHTML = q.items.map((it) =>
+    `<button class="queue-item${it.at === q.pos ? " now" : it.at < q.pos ? " past" : ""}" data-at="${it.at}">` +
+    `<span class="queue-text"><span class="name">${esc(it.title)}</span><span class="sub">${esc(it.artist)}</span></span>` +
+    (it.at === q.pos ? `<svg viewBox="0 0 24 24"><use href="#i-play" /></svg>` : "") + `</button>`).join("") +
+    (q.total > q.items[q.items.length - 1].at + 1 ? `<p class="hint queue-empty">and ${countOf(q.total - q.items[q.items.length - 1].at - 1, "more song")}</p>` : "");
+  if (first) $("remote-queue-list").querySelector(".now")?.scrollIntoView({ block: "center" });
+}
+function showRemoteQueue(open) {
+  $("remote-queue").hidden = !open;
+  $("remote-queue-btn").classList.toggle("on", open);
+  remoteQueueShown = "";
+  renderRemoteQueue();
+}
+$("remote-queue-btn").addEventListener("click", () => showRemoteQueue($("remote-queue").hidden));
+$("remote-queue-close").addEventListener("click", () => showRemoteQueue(false));
+$("remote-queue-list").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-at]");
+  if (!b || b.classList.contains("now")) return;
+  await invoke("computer_remote", { command: "jump", value: Number(b.dataset.at) }).catch((err) => setStatus(String(err), 4000));
+  setTimeout(pollRemote, 250);
+});
+
 $("remote").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-remote]");
   if (!b) return;
@@ -2801,8 +3636,9 @@ $("remote-volume").addEventListener("change", () => invoke("computer_remote", { 
 const pageStack = []; // [{ kind: "artist" | "album", key }], the last one shown
 const pageOpen = () => !$("page").hidden;
 function showPage(open) {
+  if (open) closeViewsExcept("page");
   $("page").hidden = !open;
-  document.body.classList.toggle("show-page", open);
+  syncViewClasses();
   if (!open) pageStack.length = 0;
 }
 function openPage(kind, key) {
@@ -2839,6 +3675,10 @@ function renderPage() {
   $("page-close").title = pageStack.length > 1 ? "Back (Esc)" : "Close (Esc)";
   $("page-back-icon").setAttribute("href", pageStack.length > 1 ? "#i-back" : "#i-close");
   if (top.kind === "artist") renderArtistPage(top.key);
+  else if (top.kind === "stats") renderStatsPage();
+  else if (top.kind === "dupes") renderDupesPage();
+  else if (top.kind === "genres") renderGenresPage();
+  else if (top.kind === "folders") renderFoldersPage(top.key);
   else renderAlbumPage(top.key);
   $("page").scrollTop = 0;
 }
@@ -2903,6 +3743,309 @@ function renderAlbumPage(key) {
 }
 let pageAll = [];
 
+// ------------------------------------------------------------- listening stats
+// Made from the listening history (history.jsonl, see logListen): time listened, top artists,
+// songs and albums for a week, month, year or everything.
+
+const stats = { history: null, range: "month" };
+const STAT_RANGES = { week: "This week", month: "This month", year: "This year", all: "All time" };
+const DAY = 86400;
+
+function openStats() {
+  openPage("stats");
+}
+
+function rangeStart(range) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  if (range === "week") d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // since Monday
+  else if (range === "month") d.setDate(1);
+  else if (range === "year") d.setMonth(0, 1);
+  else return 0;
+  return d.getTime() / 1000;
+}
+
+/** "3 h 20 min", "45 min" */
+function fmtListened(secs) {
+  const m = Math.round(secs / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return h >= 100 ? `${h.toLocaleString()} h` : `${h} h${m % 60 ? ` ${m % 60} min` : ""}`;
+}
+
+/** Listened seconds per day / month / year, as bars [{label, title, secs}]. */
+function statBars(list, range) {
+  const from = rangeStart(range);
+  const bars = [];
+  const key = (d) => (range === "year" || range === "allMonths" ? `${d.getFullYear()}-${d.getMonth()}` : range === "allYears" ? `${d.getFullYear()}` : d.toDateString());
+  if (range === "all") {
+    const first = list.length ? new Date(list[0].at * 1000) : new Date();
+    const months = (new Date().getFullYear() - first.getFullYear()) * 12 + new Date().getMonth() - first.getMonth();
+    return statBars(list, months > 24 ? "allYears" : "allMonths");
+  }
+  const now = new Date();
+  if (range === "week" || range === "month") {
+    const end = range === "week" ? 7 : new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    for (let i = 0; i < end; i++) {
+      const d = new Date(from * 1000);
+      d.setDate(d.getDate() + i);
+      bars.push({ key: key(d), label: range === "week" ? d.toLocaleDateString(undefined, { weekday: "short" }) : String(d.getDate()),
+        title: d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }), secs: 0, future: d > now });
+    }
+  } else if (range === "year" || range === "allMonths") {
+    const start = range === "year" ? new Date(now.getFullYear(), 0, 1) : new Date(list[0]?.at * 1000 || now);
+    const d = new Date(start.getFullYear(), start.getMonth(), 1);
+    const last = range === "year" ? new Date(now.getFullYear(), 11, 1) : new Date(now.getFullYear(), now.getMonth(), 1);
+    for (; d <= last; d.setMonth(d.getMonth() + 1)) {
+      bars.push({ key: key(d), label: d.toLocaleDateString(undefined, { month: "short" }),
+        title: d.toLocaleDateString(undefined, { month: "long", year: "numeric" }), secs: 0, future: d > now });
+    }
+  } else {
+    for (let y = new Date(list[0].at * 1000).getFullYear(); y <= now.getFullYear(); y++) bars.push({ key: String(y), label: String(y), title: String(y), secs: 0 });
+  }
+  const byKey = new Map(bars.map((b) => [b.key, b]));
+  for (const l of list) {
+    const b = byKey.get(key(new Date(l.at * 1000)));
+    if (b) b.secs += l.secs;
+  }
+  return bars;
+}
+
+/** Top entries of a list of listens grouped by `keyOf`, by time listened. */
+function topBy(list, keyOf, n = 10) {
+  const groups = new Map();
+  for (const l of list) {
+    const k = keyOf(l);
+    if (!k) continue;
+    if (!groups.has(k)) groups.set(k, { first: l, secs: 0, plays: 0 });
+    const g = groups.get(k);
+    g.secs += l.secs;
+    g.plays++;
+  }
+  return [...groups.values()].sort((a, b) => b.secs - a.secs).slice(0, n);
+}
+
+/** Most days in a row with some listening, ending at the last day listened. */
+function longestStreak(list) {
+  const days = [...new Set(list.map((l) => Math.floor((l.at - new Date(l.at * 1000).getTimezoneOffset() * 60) / DAY)))].sort((a, b) => a - b);
+  let best = 0, run = 0;
+  days.forEach((d, i) => {
+    run = i && d === days[i - 1] + 1 ? run + 1 : 1;
+    best = Math.max(best, run);
+  });
+  return best;
+}
+
+async function renderStatsPage() {
+  const body = $("page-body");
+  body.dataset.all = "stats";
+  if (!stats.history) {
+    body.innerHTML = `<h1 class="page-h1">Listening stats</h1><p class="hint">Loading…</p>`;
+    stats.history = (await invoke("get_history").catch(() => [])) || [];
+    if (pageStack[pageStack.length - 1]?.kind !== "stats") return;
+  }
+  const from = rangeStart(stats.range);
+  const list = stats.history.filter((l) => l.at >= from).sort((a, b) => a.at - b.at);
+  const total = list.reduce((s, l) => s + l.secs, 0);
+  const libraryByPath = new Map(state.tracks.map((t) => [t.path, t]));
+  const artistsInLibrary = new Set(state.tracks.map(artistKey));
+  const lc = (x) => (x || "").toLowerCase();
+  const artists = topBy(list, (l) => lc(l.artist));
+  const songs = topBy(list, (l) => l.path);
+  const albums = topBy(list.filter((l) => l.album), (l) => lc(l.artist) + "\0" + lc(l.album), 6);
+  const bars = statBars(list, stats.range);
+  const maxBar = Math.max(1, ...bars.map((b) => b.secs));
+  const busiest = topBy(list, (l) => new Date(l.at * 1000).toDateString(), 1)[0];
+  const hours = topBy(list, (l) => String(new Date(l.at * 1000).getHours()), 1)[0];
+  const tile = (value, label) => `<div class="stat-tile"><div class="stat-value">${esc(value)}</div><div class="stat-label">${esc(label)}</div></div>`;
+
+  pageSongs = songs.map((g) => libraryByPath.get(g.first.path)).filter(Boolean);
+  pageAll = pageSongs;
+  pageAlbums = albums.map((g) => libraryByPath.get(g.first.path)).map((t) => t && albumKey(t));
+  body.innerHTML =
+    `<header class="stats-head"><h1 class="page-h1">Listening stats</h1>` +
+    `<div class="segmented stat-range">${Object.entries(STAT_RANGES).map(([k, v]) => `<button data-range="${k}" class="${k === stats.range ? "on" : ""}">${v}</button>`).join("")}</div></header>` +
+    (list.length
+      ? `<div class="stat-tiles">${tile(fmtListened(total), "listened")}${tile(list.length.toLocaleString(), list.length === 1 ? "song played" : "songs played")}` +
+        `${tile(new Set(list.map((l) => lc(l.artist))).size.toLocaleString(), "artists")}` +
+        (stats.range === "week" ? "" : tile(countOf(longestStreak(list), "day"), "longest streak")) +
+        (busiest && stats.range !== "week" ? tile(new Date(busiest.first.at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }), `busiest day · ${fmtListened(busiest.secs)}`) : "") +
+        (hours ? tile(new Date(2000, 0, 1, Number(new Date(hours.first.at * 1000).getHours())).toLocaleTimeString(undefined, { hour: "numeric" }), "favourite hour") : "") +
+        `</div>` +
+        `<div class="stat-chart" role="img" aria-label="Time listened per ${bars.length > 12 ? "day" : "period"}">${bars.map((b) =>
+          `<div class="stat-bar${b.future ? " future" : ""}" data-tip="${esc(`${b.title}: ${b.secs ? fmtListened(b.secs) : "nothing"}`)}">` +
+          `<i style="height:${b.secs ? Math.max(3, (b.secs / maxBar) * 100) : 0}%"></i><span>${esc(bars.length > 16 && (Number(b.label) - 1) % 5 ? "" : b.label)}</span></div>`).join("")}` +
+        `<div id="stat-tip" class="stat-tip" hidden></div></div>` +
+        `<div class="stat-cols"><section><h2 class="page-section">Top artists</h2><ol class="stat-list">${artists.map((g) =>
+          `<li><span class="stat-name">${artistsInLibrary.has(lc(g.first.artist)) ? `<a href="#" data-artist="${esc(lc(g.first.artist))}">${esc(g.first.artist)}</a>` : esc(g.first.artist || "Unknown")}</span>` +
+          `<span class="stat-meter"><i style="width:${(g.secs / artists[0].secs) * 100}%"></i></span><span class="stat-num">${fmtListened(g.secs)}</span></li>`).join("")}</ol></section>` +
+        `<section><h2 class="page-section">Top songs</h2><ol class="stat-list">${songs.map((g) => {
+          const i = pageSongs.indexOf(libraryByPath.get(g.first.path));
+          return `<li${i >= 0 ? ` class="page-song-link" data-song="${i}"` : ""}><span class="stat-name">${esc(g.first.title)}<small>${esc(g.first.artist)}</small></span>` +
+            `<span class="stat-num">${countOf(g.plays, "play")}</span></li>`;
+        }).join("")}</ol></section></div>` +
+        (albums.length ? `<h2 class="page-section">Top albums</h2><div class="grid page-albums">${albums.map((g, i) => {
+          const t = libraryByPath.get(g.first.path);
+          return `<div class="album"${pageAlbums[i] ? ` data-album="${i}"` : ""} style="--i:${i}">${coverHtml(t && thumbOf(t), g.first.album)}<div class="name">${esc(g.first.album)}</div><div class="sub">${esc(g.first.artist)} · ${fmtListened(g.secs)}</div></div>`;
+        }).join("")}</div>` : "")
+      : `<p class="stat-empty">${stats.history.length ? `Nothing played ${STAT_RANGES[stats.range].toLowerCase()} yet.` : "Nothing here yet — songs show up once you've listened to them for a bit."}</p>`);
+}
+
+$("page-body").addEventListener("click", (e) => {
+  const r = e.target.closest("[data-range]");
+  if (r) {
+    stats.range = r.dataset.range;
+    renderStatsPage();
+  }
+  const song = e.target.closest("[data-song]");
+  if (song) playTracks(pageSongs, Number(song.dataset.song));
+});
+// the bar chart's tooltip
+$("page-body").addEventListener("pointermove", (e) => {
+  const tip = $("stat-tip");
+  if (!tip) return;
+  const bar = e.target.closest(".stat-bar");
+  for (const b of document.querySelectorAll(".stat-bar.hover")) b !== bar && b.classList.remove("hover");
+  if (!bar) return (tip.hidden = true);
+  bar.classList.add("hover");
+  tip.textContent = bar.dataset.tip;
+  tip.hidden = false;
+  const box = tip.parentElement.getBoundingClientRect(), r = bar.getBoundingClientRect();
+  tip.style.left = `${Math.min(box.width - tip.offsetWidth, Math.max(0, r.left - box.left + r.width / 2 - tip.offsetWidth / 2))}px`;
+});
+$("page-body").addEventListener("pointerleave", () => $("stat-tip") && ($("stat-tip").hidden = true));
+
+// ---------------------------------------------------------------- duplicates
+// The same song more than once in the library: same artist and title (ignoring case, "feat."
+// and bracketed bits like "(Remastered)") and nearly the same length.
+
+const dupes = { groups: [] };
+function songIdentity(t) {
+  const clean = (x) => (x || "").toLowerCase().replace(/[([].*?[)\]]/g, "").replace(/\s(feat|ft)\.?\s.*$/, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return clean(t.artist) + "\0" + clean(t.title);
+}
+function findDuplicates() {
+  const by = new Map();
+  for (const t of state.tracks) {
+    const k = songIdentity(t);
+    if (!k.split("\0")[1]) continue;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(t);
+  }
+  const groups = [];
+  for (const list of by.values()) {
+    if (list.length < 2) continue;
+    // split songs of clearly different lengths (a live or extended version is a different song)
+    list.sort((a, b) => (a.duration || 0) - (b.duration || 0));
+    let cur = [list[0]];
+    for (const t of list.slice(1)) {
+      if (Math.abs((t.duration || 0) - (cur[cur.length - 1].duration || 0)) <= 3) cur.push(t);
+      else (cur.length > 1 && groups.push(cur), (cur = [t]));
+    }
+    if (cur.length > 1) groups.push(cur);
+  }
+  return groups.sort((a, b) => cmpName(a[0].artist, b[0].artist) || cmpName(a[0].title, b[0].title));
+}
+const extOf = (p) => (p.match(/\.([a-z0-9]+)$/i)?.[1] || "").toUpperCase();
+
+const dupeQuality = new Map(); // path -> { label, score, size }
+/** The copy of a group that would be kept: the best quality, then the biggest file. */
+function bestCopy(g) {
+  const q = (t) => dupeQuality.get(t.path) || { score: 0, size: 0 };
+  return g.reduce((a, b) => (q(b).score > q(a).score || (q(b).score === q(a).score && q(b).size > q(a).size) ? b : a));
+}
+
+function renderDupesPage() {
+  const body = $("page-body");
+  body.dataset.all = "dupes";
+  dupes.groups = findDuplicates();
+  pageSongs = dupes.groups.flat();
+  pageAll = pageSongs;
+  pageAlbums = [];
+  const extra = dupes.groups.reduce((s, g) => s + g.length - 1, 0);
+  const missing = pageSongs.filter((t) => !dupeQuality.has(t.path));
+  if (missing.length) {
+    // find out each file's format and quality, then show which copy is the best
+    invoke("song_quality", { paths: missing.map((t) => t.path) }).then((q) => {
+      for (const [p, v] of Object.entries(q)) dupeQuality.set(p, v);
+      if (pageStack[pageStack.length - 1]?.kind === "dupes") renderDupesPage();
+    }, () => {});
+  }
+  const ready = !missing.length;
+  let i = 0;
+  body.innerHTML = `<header class="stats-head"><h1 class="page-h1">Duplicates</h1>` +
+    (dupes.groups.length ? `<button class="btn accent" data-dupe-all ${ready ? "" : "disabled"}>Remove all duplicates</button>` : "") + `</header>` +
+    (dupes.groups.length
+      ? `<p class="hint">${countOf(dupes.groups.length, "song")} ${dupes.groups.length === 1 ? "is" : "are"} in the library more than once (${countOf(extra, "extra copy").replace("copys", "copies")}). ` +
+        `<b>Remove all duplicates</b> keeps the best copy of each — lossless before lossy, then the highest quality — and ${phone ? "deletes" : "moves to the bin"} the rest. ` +
+        `Favourites, playlists, ratings and play counts go to the copy that's kept.</p>` +
+        dupes.groups.map((g) => {
+          const keep = ready ? bestCopy(g) : null;
+          return `<div class="dupe-group"><div class="dupe-title">${esc(g[0].title)} <span class="hint">${esc(g[0].artist)}</span></div>` +
+            g.map((t) => `<div class="dupe-row${t === keep ? " keep" : ""}" data-i="${i++}"><button class="icon-btn" data-dupe="play" title="Play"><svg viewBox="0 0 24 24"><use href="#i-play" /></svg></button>` +
+              `<div class="dupe-file"><div>${esc(t.album || "No album")} <span class="tag">${esc(dupeQuality.get(t.path)?.label || extOf(t.path))}</span> <span class="hint">${fmtTime(t.duration)}</span>` +
+              (t === keep ? ` <span class="tag best">Best · kept</span>` : "") + `</div>` +
+              `<div class="hint path" title="${esc(t.path)}">${esc(t.path)}</div></div>` +
+              (phone ? "" : `<button class="btn" data-dupe="reveal">Show</button>`) +
+              `<button class="btn danger" data-dupe="delete">Delete</button></div>`).join("") + `</div>`;
+        }).join("")
+      : `<p class="stat-empty">No duplicates — every song is in the library once.</p>`);
+}
+
+/** Keep the best copy of every duplicated song and delete the rest. */
+async function removeAllDuplicates() {
+  const groups = dupes.groups.filter((g) => g.length > 1);
+  const extra = groups.reduce((s, g) => s + g.length - 1, 0);
+  if (!extra) return;
+  if (!(await ask({
+    title: `Remove ${countOf(extra, "duplicate")}?`,
+    text: `Keeps the best copy of each of the ${countOf(groups.length, "song")} and ${phone ? "deletes the other files for good" : "moves the other files to the bin"}.`,
+    ok: "Remove", danger: true,
+  }))) return;
+  const resume = releasePlaying(groups.flat().filter((t) => !groups.some((g) => bestCopy(g) === t)).map((t) => t.path));
+  let r;
+  try {
+    r = await invoke("remove_duplicates", { groups: groups.map((g) => g.map((t) => t.path)) });
+  } catch (e) {
+    resume();
+    return setStatus(String(e), 6000);
+  }
+  // the deleted copies leave the library, and the queue plays the kept copy in their place
+  // (replacing the queue's entries, not changing them: they're the same songs as the library's)
+  const gaveWay = new Map(r.removed);
+  const byPath = new Map(state.tracks.map((t) => [t.path, t]));
+  state.queue = state.queue.map((t) => (gaveWay.has(t.path) ? byPath.get(gaveWay.get(t.path)) || t : t));
+  if (radio.on) radio.queue = state.queue;
+  state.tracks = state.tracks.filter((t) => !gaveWay.has(t.path));
+  state.favorites = new Set(r.settings.favorites || []);
+  state.playlists = r.settings.playlists || [];
+  plSets.clear();
+  state.stats = (await invoke("get_stats").catch(() => null)) || state.stats;
+  resume();
+  applySearch();
+  renderDupesPage();
+  setStatus(`Removed ${countOf(r.removed.length, "duplicate")}` + (r.failed.length ? ` · ${r.failed.length} couldn't be: ${r.failed[0]}` : ""), 6000);
+}
+$("page-body").addEventListener("click", (e) => e.target.closest("[data-dupe-all]") && removeAllDuplicates());
+
+$("page-body").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-dupe]");
+  if (!b) return;
+  const t = pageSongs[Number(b.closest(".dupe-row").dataset.i)];
+  if (b.dataset.dupe === "play") return playTracks([t], 0);
+  if (b.dataset.dupe === "reveal") return invoke("reveal_file", { path: t.path }).catch((err) => setStatus(String(err), 4000));
+  if (!(await ask({ title: `Delete "${t.title}" (${extOf(t.path)}, ${t.album || "no album"})?`, text: t.path, ok: "Delete", danger: true }))) return;
+  try {
+    await invoke("delete_song", { path: t.path });
+    state.tracks = state.tracks.filter((x) => x !== t);
+    applySearch();
+    renderDupesPage();
+    setStatus(`Deleted ${t.title}`, 3000);
+  } catch (err) {
+    setStatus(String(err), 5000);
+  }
+});
+
 /** Fill in what Last.fm knows: the text, tags and similar artists. */
 async function loadAbout(artist, album) {
   const top = pageStack[pageStack.length - 1];
@@ -2948,14 +4091,11 @@ $("page-body").addEventListener("click", (e) => {
 const npOpen = () => !$("np").hidden;
 function showNowPlaying(open) {
   if (open && !current()) return;
+  if (open) closeViewsExcept("np");
   $("np").hidden = !open;
-  document.body.classList.toggle("show-np", open);
+  syncViewClasses();
   $("np-btn").classList.toggle("on", open);
-  if (open) {
-    showDownloads(false);
-    showPage(false);
-    renderNowPlaying();
-  }
+  if (open) renderNowPlaying();
 }
 $("np-btn").addEventListener("click", () => showNowPlaying(!npOpen()));
 $("np-artist").addEventListener("click", () => current() && !current().sc && openPage("artist", artistKey(current())));
@@ -2978,6 +4118,10 @@ function renderNowPlaying() {
   $("np-title").textContent = t.title;
   $("np-artist").textContent = t.artist;
   $("np-album").textContent = [t.album, t.year].filter(Boolean).join(" · ");
+  renderNowStars();
+  renderNpTools();
+  if (wantGraph() && !graph) startEqualizer().then(drawVisualizer);
+  else drawVisualizer();
   // library songs: the artist and album lead to their pages
   $("np-artist").classList.toggle("link", !t.sc);
   $("np-album").classList.toggle("link", !t.sc && !!t.album);
@@ -2997,6 +4141,8 @@ function parseLrc(lrc) {
 }
 
 async function loadLyrics(t) {
+  if (lyr.editing === t.path) return;
+  lyr.editing = null;
   lyr.path = t.path;
   lyr.lines = null;
   lyr.at = -1;
@@ -3005,15 +4151,15 @@ async function loadLyrics(t) {
   if (!got) {
     box.innerHTML = `<p class="np-note">Looking for lyrics…</p>`;
     try {
-      const r = await invoke("lyrics", { title: t.title, artist: t.artist, album: t.album || "", duration: t.duration || audio.duration || 0 });
-      got = { synced: r.synced ? parseLrc(r.synced) : null, plain: r.plain, instrumental: r.instrumental };
+      const r = await invoke("lyrics", { title: t.title, artist: t.artist, album: t.album || "", duration: t.duration || audio.duration || 0, path: t.sc ? null : t.path });
+      got = { synced: r.synced ? parseLrc(r.synced) : null, plain: r.plain, instrumental: r.instrumental, fromFile: r.fromFile, raw: r.synced || r.plain || "" };
     } catch {
       got = "error";
     }
     lyricsCache.set(t.path, got);
     if (lyr.path !== t.path) return; // the song changed meanwhile
   }
-  const credit = `<p class="np-credit">Lyrics from <a href="#" data-open="https://lrclib.net">LRCLIB</a></p>`;
+  const credit = got.fromFile ? `<p class="np-credit">Lyrics saved in the song file</p>` : `<p class="np-credit">Lyrics from <a href="#" data-open="https://lrclib.net">LRCLIB</a></p>`;
   if (got === "error") {
     box.innerHTML = `<p class="np-note">Couldn't reach the lyrics service.</p>`;
   } else if (got.synced?.length) {
@@ -3028,6 +4174,81 @@ async function loadLyrics(t) {
     box.innerHTML = `<p class="np-note">${got.instrumental ? "Instrumental" : "No lyrics found for this song."}</p>`;
   }
 }
+
+// ---- the lyrics editor: write or fix lyrics, and time them while the song plays
+
+const LRC_TIME = /^\s*\[\d+:\d{1,2}(?:\.\d+)?\]\s?/;
+const lrcStamp = (secs) => `[${String(Math.floor(secs / 60)).padStart(2, "0")}:${(secs % 60).toFixed(2).padStart(5, "0")}]`;
+function editLyrics() {
+  const t = current();
+  if (!t || t.sc) return;
+  const got = lyricsCache.get(t.path);
+  lyr.editing = t.path;
+  lyr.lines = null;
+  $("np-lyrics").innerHTML =
+    `<div class="lyr-edit">` +
+    `<p class="np-note">One line per line of the song. To time them, play the song, put the cursor on a line and press <b>Stamp</b> (or Ctrl+Enter) as it's sung — it moves on to the next line.</p>` +
+    `<textarea id="lyr-text" spellcheck="false" placeholder="Type or paste the lyrics here"></textarea>` +
+    `<div class="lyr-actions"><button class="btn" id="lyr-stamp" title="Ctrl+Enter">Stamp ${lrcStamp(audio.currentTime)}</button>` +
+    `<button class="btn" id="lyr-untime">Remove times</button><span class="spacer"></span>` +
+    `<button class="btn" id="lyr-cancel">Cancel</button><button class="btn accent" id="lyr-save">Save to the song</button></div></div>`;
+  $("lyr-text").value = got && got !== "error" ? got.raw || "" : "";
+  $("lyr-text").focus();
+}
+function stampLine() {
+  const ta = $("lyr-text");
+  if (!ta) return;
+  const v = ta.value, start = v.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+  let end = v.indexOf("\n", start);
+  if (end < 0) end = v.length;
+  const line = lrcStamp(Math.max(0, audio.currentTime - 0.15)) + " " + v.slice(start, end).replace(LRC_TIME, "");
+  ta.value = v.slice(0, start) + line + v.slice(end);
+  // on to the next line that has words
+  let next = start + line.length + 1;
+  while (next < ta.value.length && ta.value[next] === "\n") next++;
+  ta.setSelectionRange(Math.min(next, ta.value.length), Math.min(next, ta.value.length));
+  const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+  ta.scrollTop = Math.max(0, ta.value.slice(0, next).split("\n").length * lineH - ta.clientHeight / 2);
+}
+async function saveLyrics() {
+  const t = current();
+  if (!t || lyr.editing !== t.path) return;
+  const text = $("lyr-text").value.replace(/\s+$/, "");
+  const resume = releasePlaying([t.path]);
+  try {
+    await invoke("save_lyrics", { path: t.path, text });
+  } catch (e) {
+    resume();
+    return setStatus(String(e), 6000);
+  }
+  resume();
+  lyr.editing = null;
+  lyricsCache.delete(t.path);
+  lyr.path = null;
+  loadLyrics(t);
+  setStatus(text ? "Saved the lyrics into the song" : "Took the lyrics out of the song", 3000);
+}
+$("np-lyrics").addEventListener("click", (e) => {
+  if (e.target.id === "lyr-stamp") stampLine(), $("lyr-text").focus();
+  else if (e.target.id === "lyr-untime") $("lyr-text").value = $("lyr-text").value.split("\n").map((l) => l.replace(LRC_TIME, "")).join("\n");
+  else if (e.target.id === "lyr-save") saveLyrics();
+  else if (e.target.id === "lyr-cancel") {
+    lyr.editing = null;
+    lyr.path = null;
+    loadLyrics(current());
+  }
+});
+$("np-lyrics").addEventListener("keydown", (e) => {
+  if (e.target.id === "lyr-text" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    stampLine();
+  }
+});
+onAudio("timeupdate", () => {
+  const b = $("lyr-stamp");
+  if (b) b.textContent = `Stamp ${lrcStamp(audio.currentTime)}`;
+});
+$("np-lyr-edit").addEventListener("click", editLyrics);
 
 /** Light up the line being sung and keep it in the middle. */
 function syncLyrics() {
@@ -3407,10 +4628,9 @@ const viaLabel = (it) => (it.via === "yt-dlp" || (!it.via && !it.t.downloadable)
 
 function showDownloads(open = true) {
   closeSettings();
-  if (open && npOpen()) showNowPlaying(false);
-  if (open && pageOpen()) showPage(false);
-  document.body.classList.toggle("show-downloads", open);
+  if (open) closeViewsExcept("downloads");
   $("downloads").hidden = !open;
+  syncViewClasses();
   if (open) {
     renderDownloads();
     pollSlskTransfers();
@@ -4394,7 +5614,11 @@ $("run-setup").addEventListener("click", () => {
 // Once at start and then twice a day, ask GitHub whether a newer release is out. If so, an Update
 // button appears in the title bar that opens the release page; the × skips that version.
 
-const update = { info: null, error: "", checking: false };
+const update = { info: null, error: "", checking: false, canInstall: false, installing: null };
+invoke("can_self_update").then((can) => {
+  update.canInstall = !!can;
+  renderUpdate();
+}, () => {});
 
 async function checkForUpdate(manual = false) {
   if (update.checking) return;
@@ -4406,7 +5630,7 @@ async function checkForUpdate(manual = false) {
     const { newer, latest } = update.info;
     if (newer && (manual || latest !== prefs.skipVersion)) {
       if (manual && latest === prefs.skipVersion) setPref("skipVersion", ""); // asked by hand: show it again
-      setStatus(`yuuricloud ${latest} is out — click Update at the top to get it`, 8000);
+      setStatus(`yuuricloud ${latest} is out — click ${update.canInstall ? "Install" : "Update"} at the top to get it`, 8000);
     } else if (manual) {
       setStatus(newer ? "" : "You have the newest version", 4000);
     }
@@ -4423,8 +5647,12 @@ function renderUpdate() {
   const show = !!info?.newer && info.latest !== prefs.skipVersion;
   $("update-pill").hidden = !show;
   if (show) {
-    $("update-open").textContent = `Update to ${info.latest}`;
-    $("update-open").title = `yuuricloud ${info.latest} is out (you have ${info.current}). Opens its download page.`;
+    const pct = update.installing;
+    $("update-open").textContent = pct != null ? (pct >= 0 ? `Downloading… ${pct}%` : "Downloading…") : `${update.canInstall ? "Install" : "Update to"} ${info.latest}`;
+    $("update-open").disabled = pct != null;
+    $("update-open").title = update.canInstall
+      ? `yuuricloud ${info.latest} is out (you have ${info.current}). Downloads it, installs it and restarts.`
+      : `yuuricloud ${info.latest} is out (you have ${info.current}). Opens its download page.`;
   }
   const status = $("update-status");
   status.className = "hint" + (show ? " ok" : update.error ? " err" : "");
@@ -4436,7 +5664,26 @@ function renderUpdate() {
   $("update-check").disabled = update.checking;
 }
 
-$("update-open").addEventListener("click", () => update.info && window.__TAURI__.opener.openUrl(update.info.url));
+$("update-open").addEventListener("click", async () => {
+  if (!update.info || update.installing != null) return;
+  if (!update.canInstall) return window.__TAURI__.opener.openUrl(update.info.url);
+  update.installing = -1;
+  renderUpdate();
+  saveSession();
+  const stop = await listen("update-progress", ({ payload: [got, total] }) => {
+    update.installing = total ? Math.floor((got / total) * 100) : -1;
+    renderUpdate();
+  });
+  try {
+    await invoke("install_update"); // restarts the app when it worked
+  } catch (e) {
+    setStatus(`${e} — opening the download page instead.`, 8000);
+    window.__TAURI__.opener.openUrl(update.info.url);
+  }
+  stop();
+  update.installing = null;
+  renderUpdate();
+});
 $("update-skip").addEventListener("click", () => {
   if (!update.info) return;
   setPref("skipVersion", update.info.latest);
@@ -4516,6 +5763,10 @@ async function openEditor(t) {
     return setStatus(String(e), 6000);
   }
   editor.track = t;
+  editor.tracks = null;
+  editor.trackChanges = null;
+  editor.hadCover = !!tags.cover;
+  setEditorMode("song");
   editor.cover = { kind: "keep" };
   editor.albumSongs = state.tracks.filter((x) => albumKey(x) === albumKey(t));
   const names = libraryNames();
@@ -4530,6 +5781,8 @@ async function openEditor(t) {
   $("ed-track").value = tags.trackNo ?? (t.trackNo || "");
   $("ed-disc").value = tags.discNo ?? "";
   $("ed-year").value = tags.year || t.year || "";
+  $("ed-genre").value = tags.genre || t.genre || "";
+  fillGenreList();
   $("ed-path").textContent = t.path;
   $("ed-path").title = t.path;
   for (const id of ["ed-artist-hint", "ed-album-artist-hint", "ed-album-hint"]) $(id).hidden = true;
@@ -4538,6 +5791,7 @@ async function openEditor(t) {
   $("editor-cover-all-row").hidden = editor.albumSongs.length < 2;
   $("editor-cover-all").checked = true;
   $("editor-error").textContent = "";
+  $("editor-error").className = "hint err";
   $("editor-save").disabled = false;
   $("editor").hidden = false;
   $("ed-title").focus();
@@ -4552,15 +5806,228 @@ function setEditorCover(src, t = editor.track) {
 function closeEditor() {
   $("editor").hidden = true;
   editor.track = null;
+  editor.tracks = null;
 }
+
+function setEditorMode(mode) {
+  editor.mode = mode;
+  $("editor").querySelector(".editor").classList.toggle("album-mode", mode === "album");
+  $("editor-title").textContent = mode === "album" ? "Edit album info" : "Edit song info";
+  $("editor-find-panel").hidden = true;
+  for (const id of ["ed-artist", "ed-album-artist", "ed-album", "ed-disc", "ed-year", "ed-genre"]) $(id).placeholder = "";
+}
+
+function fillGenreList() {
+  $("ed-genres").innerHTML = [...new Set(state.tracks.map((t) => t.genre).filter(Boolean))].sort(collator.compare)
+    .map((g) => `<option value="${esc(g)}"></option>`).join("");
+}
+
+/** Edit a whole album at once: the fields all its songs share (left empty where they differ). */
+async function openAlbumEditor(tracks) {
+  closeMenu();
+  const t = tracks[0];
+  let tags = {};
+  try {
+    tags = await invoke("song_tags", { path: t.path });
+  } catch {}
+  editor.track = t;
+  editor.tracks = tracks;
+  editor.trackChanges = null;
+  editor.hadCover = !!tags.cover;
+  setEditorMode("album");
+  editor.cover = { kind: "keep" };
+  editor.albumSongs = tracks;
+  const names = libraryNames();
+  editor.names = names;
+  $("ed-artists").innerHTML = names.artists.map((n) => `<option value="${esc(n)}"></option>`).join("");
+  $("ed-albums").innerHTML = names.albums.map((n) => `<option value="${esc(n)}"></option>`).join("");
+  const common = (f) => (tracks.every((x) => f(x) === f(t)) ? f(t) : null);
+  editor.initial = {};
+  const fill = (id, value) => {
+    $(id).value = value ?? "";
+    if (value === null) $(id).placeholder = "Different on each song — leave to keep";
+    editor.initial[id] = $(id).value;
+  };
+  fill("ed-artist", common((x) => x.artist));
+  fill("ed-album-artist", common((x) => x.albumArtist));
+  fill("ed-album", common((x) => x.album));
+  fill("ed-disc", common((x) => String(x.discNo || "")));
+  fill("ed-year", common((x) => x.year || ""));
+  fill("ed-genre", common((x) => x.genre || ""));
+  fillGenreList();
+  $("ed-path").textContent = `${countOf(tracks.length, "song")} · ${parentDir(t.path)}`;
+  $("ed-path").title = t.path;
+  for (const id of ["ed-artist-hint", "ed-album-artist-hint", "ed-album-hint"]) $(id).hidden = true;
+  setEditorCover(tags.cover, t);
+  $("editor-cover-all-row").hidden = true;
+  $("editor-cover-all").checked = true;
+  $("editor-error").textContent = "";
+  $("editor-error").className = "hint err";
+  $("editor-save").disabled = false;
+  $("editor").hidden = false;
+  $("ed-album").focus();
+}
+const parentDir = (p) => p.replace(/[\\/][^\\/]*$/, "");
+
+/** Album mode: the fields that were changed, for every song (plus what MusicBrainz matched). */
+function albumChanges() {
+  const changed = {};
+  const map = { "ed-artist": "artist", "ed-album-artist": "albumArtist", "ed-album": "album", "ed-year": "year", "ed-genre": "genre" };
+  for (const [id, key] of Object.entries(map)) if ($(id).value !== editor.initial[id]) changed[key] = $(id).value;
+  if ($("ed-disc").value !== editor.initial["ed-disc"]) changed.discNo = Math.max(0, Math.floor(Number($("ed-disc").value) || 0));
+  return editor.tracks.map((t) => ({ path: t.path, changes: { ...changed, ...(editor.trackChanges?.get(t.path) || {}) } }))
+    .filter((x) => Object.keys(x.changes).length || editor.cover.kind !== "keep");
+}
+
+/** Close a song's file if it's playing (it can't be rewritten meanwhile); returns how to resume. */
+function releasePlaying(paths) {
+  const t = current();
+  if (!t || !paths.includes(t.path)) return () => {};
+  const at = audio.currentTime, playing = !audio.paused;
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  return () => {
+    const now = current() || t;
+    setSrc(audio, now.path);
+    audio.addEventListener("loadedmetadata", () => (audio.currentTime = at), { once: true });
+    if (playing) audio.play().catch(() => {});
+  };
+}
+
+async function saveAlbumEditor() {
+  const songs = albumChanges();
+  if (!songs.length) return closeEditor();
+  const resume = releasePlaying(songs.map((x) => x.path));
+  editor.saving = true;
+  $("editor-save").disabled = true;
+  $("editor-error").textContent = "";
+  try {
+    await invoke("save_many_tags", { songs, cover: editor.cover });
+    closeEditor();
+    setStatus(`Saved ${countOf(songs.length, "song")}`, 3000);
+    await rescan(false);
+  } catch (e) {
+    $("editor-error").textContent = String(e);
+    $("editor-save").disabled = false;
+    if (String(e).startsWith("Saved")) await rescan(false);
+  }
+  editor.saving = false;
+  resume();
+}
+
+// ---- Find online (MusicBrainz)
+
+const find = { results: [], token: 0 };
+function openFind() {
+  const album = editor.mode === "album";
+  $("find-a").placeholder = album ? "Album" : "Title";
+  $("find-a").value = album ? $("ed-album").value || editor.track.album : $("ed-title").value;
+  $("find-b").value = (album ? $("ed-album-artist").value : $("ed-artist").value) || $("ed-artist").value || editor.track.artist;
+  $("find-cover").checked = !editor.hadCover && editor.cover.kind !== "file";
+  $("find-results").innerHTML = "";
+  $("editor-find-panel").hidden = false;
+  if ($("find-a").value.trim()) runFind();
+  else $("find-a").focus();
+}
+async function runFind() {
+  const token = ++find.token, album = editor.mode === "album";
+  const a = $("find-a").value.trim(), b = $("find-b").value.trim();
+  if (!a) return;
+  $("find-results").innerHTML = `<div class="hint">Searching…</div>`;
+  try {
+    find.results = album
+      ? await invoke("mb_search_album", { album: a, artist: b })
+      : await invoke("mb_search_song", { title: a, artist: b, album: $("ed-album").value });
+  } catch (e) {
+    if (token === find.token) $("find-results").innerHTML = `<div class="hint err">${esc(String(e))}</div>`;
+    return;
+  }
+  if (token !== find.token) return;
+  const art = (id) => `<div class="find-art"><img src="https://coverartarchive.org/release/${encodeURIComponent(id)}/front-250" alt="" loading="lazy" onerror="this.remove()"></div>`;
+  const len = editor.track.duration;
+  $("find-results").innerHTML = find.results.length
+    ? find.results.map((m, i) => album
+      ? `<button class="find-row" data-i="${i}">${art(m.releaseId)}<div class="find-text"><div>${esc(m.album)}</div>` +
+        `<div class="sub">${esc([m.albumArtist, m.year, m.country, m.format, m.trackCount && countOf(m.trackCount, "song")].filter(Boolean).join(" · "))}</div></div><span class="find-score">${m.score}%</span></button>`
+      : `<button class="find-row" data-i="${i}">${art(m.releaseId)}<div class="find-text"><div>${esc(m.title)} — ${esc(m.artist)}</div>` +
+        `<div class="sub">${esc([m.album, m.year, m.trackNo && `track ${m.trackNo}`, m.length && fmtTime(m.length)].filter(Boolean).join(" · "))}</div></div>` +
+        `<span class="find-score" title="${m.length && len && Math.abs(m.length - len) > 10 ? "A different length from this song" : ""}">${m.length && len && Math.abs(m.length - len) > 10 ? "≠ length" : `${m.score}%`}</span></button>`).join("")
+    : `<div class="hint">Nothing found. Try fewer words, or check the spelling.</div>`;
+}
+
+async function useFound(m) {
+  const album = editor.mode === "album";
+  const set = (id, v) => v != null && v !== "" && ($(id).value = v);
+  if (album) {
+    set("ed-album", m.album);
+    set("ed-album-artist", m.albumArtist);
+    set("ed-year", m.year);
+  } else {
+    set("ed-title", m.title);
+    set("ed-artist", m.artist);
+    set("ed-album", m.album);
+    if (!$("ed-album-artist").value || m.albumArtist !== m.artist) set("ed-album-artist", m.albumArtist);
+    set("ed-year", m.year);
+    set("ed-track", m.trackNo);
+    set("ed-disc", m.discNo);
+  }
+  $("editor-find-panel").hidden = true;
+  $("editor-error").textContent = "";
+  const wantCover = $("find-cover").checked;
+  if (album) {
+    // match the album's songs to the release's, by title, to fix titles and numbers
+    try {
+      const songs = await invoke("mb_album_tracks", { releaseId: m.releaseId });
+      const key = (x) => songIdentity({ artist: "", title: x }).slice(1);
+      const byTitle = new Map(songs.map((s) => [key(s.title), s]));
+      editor.trackChanges = new Map();
+      for (const t of editor.tracks) {
+        const s = byTitle.get(key(t.title)) || (songs.length === editor.tracks.length && !t.trackNo ? null : songs.find((x) => x.trackNo === t.trackNo && x.discNo === (t.discNo || 1) && Math.abs((x.length || 0) - (t.duration || 0)) < 5));
+        if (s) editor.trackChanges.set(t.path, { title: s.title, trackNo: s.trackNo, discNo: songs.some((x) => x.discNo > 1) ? s.discNo : undefined });
+      }
+      $("editor-error").textContent = `Matched ${editor.trackChanges.size} of ${countOf(editor.tracks.length, "song")} to this album's tracks.`;
+      $("editor-error").className = "hint";
+    } catch (e) {
+      $("editor-error").textContent = String(e);
+    }
+  }
+  if (wantCover) {
+    $("editor-cover-change").disabled = true;
+    try {
+      const cover = await invoke("mb_cover", { releaseId: m.releaseId });
+      if (cover) {
+        editor.cover = { kind: "file", path: cover.path };
+        setEditorCover(cover.preview);
+      } else {
+        $("editor-error").textContent = "That release has no cover on the Cover Art Archive.";
+      }
+    } catch (e) {
+      $("editor-error").textContent = String(e);
+    }
+    $("editor-cover-change").disabled = false;
+  }
+}
+
+$("editor-find").addEventListener("click", openFind);
+$("find-back").addEventListener("click", () => ($("editor-find-panel").hidden = true));
+$("find-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  runFind();
+});
+$("find-results").addEventListener("click", (e) => {
+  const row = e.target.closest(".find-row");
+  if (row) useFound(find.results[Number(row.dataset.i)]);
+});
 
 async function saveEditor() {
   const t = editor.track;
   if (!t || editor.saving) return;
+  if (editor.mode === "album") return saveAlbumEditor();
   const num = (id) => (Number($(id).value) > 0 ? Math.floor(Number($(id).value)) : null);
   const edit = {
     title: $("ed-title").value, artist: $("ed-artist").value, albumArtist: $("ed-album-artist").value, album: $("ed-album").value,
-    trackNo: num("ed-track"), discNo: num("ed-disc"), year: $("ed-year").value,
+    trackNo: num("ed-track"), discNo: num("ed-disc"), year: $("ed-year").value, genre: $("ed-genre").value,
   };
   if (!edit.title.trim()) {
     $("editor-error").textContent = "A song needs a title.";
@@ -4598,7 +6065,7 @@ $("editor-close").addEventListener("click", closeEditor);
 $("editor-cancel").addEventListener("click", closeEditor);
 $("editor-save").addEventListener("click", saveEditor);
 $("editor").addEventListener("mousedown", (e) => e.target === $("editor") && closeEditor());
-$("editor").addEventListener("keydown", (e) => e.key === "Enter" && e.target.tagName === "INPUT" && saveEditor());
+$("editor").addEventListener("keydown", (e) => e.key === "Enter" && e.target.tagName === "INPUT" && !e.target.closest("#editor-find-panel") && saveEditor());
 $("editor-cover-change").addEventListener("click", async () => {
   try {
     const picked = await invoke("pick_cover_image");

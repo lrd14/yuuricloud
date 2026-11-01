@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use discord_rich_presence::activity::{Activity, ActivityType, Assets, StatusDisplayType, Timestamps};
+use discord_rich_presence::activity::{Activity, ActivityType, Assets, Button, StatusDisplayType, Timestamps};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,6 +59,28 @@ pub struct NowPlaying {
     /// Cover URL to show on Discord (SoundCloud artwork); local songs have none.
     #[serde(default)]
     pub image: Option<String>,
+    /// The song's SoundCloud page, for a "Listen on SoundCloud" button on Discord.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// The button under the status: the song on SoundCloud, or else on Last.fm.
+fn discord_button(track: &NowPlaying) -> (&'static str, String) {
+    match track.url.as_deref().filter(|u| u.starts_with("https://soundcloud.com/")) {
+        Some(url) => ("Listen on SoundCloud", url.to_string()),
+        None => {
+            let part = |s: &str| {
+                s.bytes()
+                    .map(|b| match b {
+                        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+                        b' ' => "+".into(),
+                        _ => format!("%{b:02X}"),
+                    })
+                    .collect::<String>()
+            };
+            ("Song on Last.fm", format!("https://www.last.fm/music/{}/_/{}", part(&track.artist), part(&track.title)))
+        }
+    }
 }
 
 pub fn unix_now() -> i64 {
@@ -279,6 +301,7 @@ impl Discord {
     /// Show the song as "Listening to …". `position` is seconds into the song.
     pub fn show(&mut self, client_id: &str, track: &NowPlaying, playing: bool, position: f64, image: Option<&str>) -> Result<(), String> {
         let large_text = if track.album.is_empty() { track.title.clone() } else { track.album.clone() };
+        let (label, url) = discord_button(track);
         let mut activity = Activity::new()
             .activity_type(ActivityType::Listening)
             .status_display_type(StatusDisplayType::Details)
@@ -289,6 +312,7 @@ impl Discord {
             assets = assets.large_image(url);
         }
         activity = activity.assets(assets);
+        activity = activity.buttons(vec![Button::new(label, url.as_str())]);
         if playing && track.duration > 0.0 {
             let start = unix_now() - position as i64;
             activity = activity.timestamps(Timestamps::new().start(start).end(start + track.duration as i64));

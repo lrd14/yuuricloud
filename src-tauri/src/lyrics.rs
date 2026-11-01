@@ -16,6 +16,33 @@ pub struct Lyrics {
     pub synced: Option<String>,
     pub plain: Option<String>,
     pub instrumental: bool,
+    /// read from the song file itself rather than LRCLIB
+    pub from_file: bool,
+}
+
+/// Lyrics saved in the song file (ID3 USLT, Vorbis LYRICS, MP4 ©lyr), timed or not.
+pub fn from_file(path: &Path) -> Option<Lyrics> {
+    use lofty::prelude::*;
+    let file = lofty::read_from_path(path).ok()?;
+    let text = file.tags().iter().find_map(|t| t.get_string(lofty::tag::ItemKey::Lyrics).map(str::trim).filter(|s| !s.is_empty()).map(String::from))?;
+    Some(from_text(&text))
+}
+
+/// Text with "[mm:ss.xx]" times on its lines is timed; any other text is plain.
+pub fn from_text(text: &str) -> Lyrics {
+    let timed = text.lines().filter(|l| is_timed(l)).count();
+    if timed >= 2 || (timed == 1 && text.lines().filter(|l| !l.trim().is_empty()).count() == 1) {
+        Lyrics { synced: Some(text.to_string()), from_file: true, ..Default::default() }
+    } else {
+        Lyrics { plain: Some(text.to_string()), from_file: true, ..Default::default() }
+    }
+}
+
+fn is_timed(line: &str) -> bool {
+    let l = line.trim_start();
+    let Some(end) = l.find(']') else { return false };
+    let inner = &l[1.min(l.len())..end];
+    l.starts_with('[') && inner.contains(':') && inner.chars().all(|c| c.is_ascii_digit() || c == ':' || c == '.')
 }
 
 fn agent() -> ureq::Agent {
@@ -28,7 +55,7 @@ fn agent() -> ureq::Agent {
 
 fn from_json(v: &Value) -> Lyrics {
     let text = |key: &str| v[key].as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
-    Lyrics { synced: text("syncedLyrics"), plain: text("plainLyrics"), instrumental: v["instrumental"].as_bool().unwrap_or(false) }
+    Lyrics { synced: text("syncedLyrics"), plain: text("plainLyrics"), instrumental: v["instrumental"].as_bool().unwrap_or(false), from_file: false }
 }
 
 fn found(l: &Lyrics) -> bool {
@@ -117,6 +144,13 @@ mod tests {
         assert!(l.synced.unwrap().contains("Is this the real life"));
         // a search finds it without the album or length too
         assert!(look_up("bohemian rhapsody", "queen", "Some Other Album", 0.0).unwrap().plain.is_some());
+    }
+
+    #[test]
+    fn tells_timed_from_plain() {
+        assert!(from_text("[00:01.00] one\n[00:04.50] two").synced.is_some());
+        assert!(from_text("one\ntwo [x]").plain.is_some());
+        assert!(from_text("[ar: Someone]\nonly words").plain.is_some());
     }
 
     #[test]

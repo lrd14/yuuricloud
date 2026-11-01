@@ -25,6 +25,8 @@ pub trait Source: Send + Sync + 'static {
     /// what's playing, for the remote
     fn now(&self) -> Value;
     fn command(&self, command: &str, value: Option<f64>);
+    /// make a song a favourite (the phone has it as one)
+    fn favorite(&self, path: &str);
 }
 
 struct App(AppHandle);
@@ -41,6 +43,15 @@ impl Source for App {
     }
     fn command(&self, command: &str, value: Option<f64>) {
         let _ = self.0.emit("remote-command", json!({ "command": command, "value": value }));
+    }
+    fn favorite(&self, path: &str) {
+        let state = self.0.state::<AppState>();
+        let mut s = state.settings.lock().unwrap();
+        if !s.favorites.iter().any(|f| f == path) {
+            s.favorites.push(path.to_string());
+            state.save_settings(&s);
+            let _ = self.0.emit("favorites-changed", s.favorites.clone());
+        }
     }
 }
 
@@ -214,6 +225,16 @@ fn answer(source: &dyn Source, token: &str, request: tiny_http::Request) {
             reply_json(request, 200, &serde_json::to_value(backup).unwrap_or(Value::Null));
         }
         (tiny_http::Method::Get, "/remote") => reply_json(request, 200, &source.now()),
+        (tiny_http::Method::Post, p) if p.starts_with("/favorite/") => {
+            let id = p.trim_start_matches("/favorite/");
+            match source.tracks().into_iter().find(|t| song_id(&t.path) == id) {
+                Some(t) => {
+                    source.favorite(&t.path);
+                    reply_json(request, 200, &json!({ "ok": true }));
+                }
+                None => reply_json(request, 404, &json!({ "error": "No such song" })),
+            }
+        }
         (tiny_http::Method::Post, p) if p.starts_with("/remote/") => {
             let value = param("value").and_then(|v| v.parse::<f64>().ok());
             source.command(p.trim_start_matches("/remote/"), value);
@@ -233,6 +254,7 @@ mod tests {
         tracks: Vec<Track>,
         settings: Settings,
         commands: Mutex<Vec<(String, Option<f64>)>>,
+        favorited: Mutex<Vec<String>>,
     }
 
     impl Source for Fake {
@@ -247,6 +269,9 @@ mod tests {
         }
         fn command(&self, command: &str, value: Option<f64>) {
             self.commands.lock().unwrap().push((command.into(), value));
+        }
+        fn favorite(&self, path: &str) {
+            self.favorited.lock().unwrap().push(path.into());
         }
     }
 
@@ -270,7 +295,7 @@ mod tests {
         };
         let mut settings = Settings::default();
         settings.favorites = vec![track.path.clone()];
-        let fake = Arc::new(Fake { tracks: vec![track], settings, commands: Mutex::new(Vec::new()) });
+        let fake = Arc::new(Fake { tracks: vec![track], settings, commands: Mutex::new(Vec::new()), favorited: Mutex::new(Vec::new()) });
         let (share, port) = serve(fake.clone(), ("127.0.0.1", 0), "127.0.0.1").unwrap();
 
         let link = computer::from_link(&format!("yuuricloud://pair?h=127.0.0.1:{port}&t={}&n=PC", share.token)).unwrap();
@@ -293,6 +318,11 @@ mod tests {
         assert_eq!(computer::get_json(&link, "/remote").unwrap()["title"], "Song A");
         computer::remote(&link, "seek", Some(42.5)).unwrap();
         assert_eq!(fake.commands.lock().unwrap()[0], ("seek".to_string(), Some(42.5)));
+
+        // a favourite on the phone becomes one on the computer
+        computer::favorite_there(&link, &want.id).unwrap();
+        assert_eq!(*fake.favorited.lock().unwrap(), vec![fake.tracks[0].path.clone()]);
+        assert!(computer::favorite_there(&link, "nosuchsong").is_err());
 
         // the wrong token gets nowhere
         let stranger = ComputerLink { token: "nope".into(), ..link.clone() };

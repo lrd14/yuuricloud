@@ -6,9 +6,13 @@ mod computer;
 mod cover_color;
 mod downloads;
 mod editor;
+mod history;
 mod integrations;
 mod library;
 mod lyrics;
+mod m3u;
+mod musicbrainz;
+mod quality;
 #[cfg(desktop)]
 mod share;
 mod slsk;
@@ -16,6 +20,8 @@ mod slsk_native;
 mod soundcloud;
 mod tools;
 mod waveform;
+#[cfg(desktop)]
+mod watch;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,12 +35,15 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-/// How often and when a song was played, for the smart lists.
+/// How often and when a song was played (for the smart lists), and its star rating.
 #[derive(Clone, Default, Serialize, serde::Deserialize)]
 struct PlayStat {
     plays: u32,
     /// unix time of the last play
     last: i64,
+    /// 0 (not rated) to 5 stars
+    #[serde(default)]
+    rating: u8,
 }
 
 struct AppState {
@@ -425,6 +434,143 @@ fn record_play(state: State<AppState>, path: String) -> PlayStat {
     stat
 }
 
+/// Give a library song 1 to 5 stars, or 0 to take its rating away.
+#[tauri::command]
+fn set_rating(state: State<AppState>, path: String, rating: u8) -> PlayStat {
+    let mut stats = state.stats.lock().unwrap();
+    let stat = stats.entry(path).or_default();
+    stat.rating = rating.min(5);
+    let stat = stat.clone();
+    library::save_json(&state.data_dir.join("stats.json"), &*stats);
+    stat
+}
+
+/// Add a song to the listening history (once it has stopped playing).
+#[tauri::command]
+fn log_listen(state: State<AppState>, listen: history::Listen) -> Result<(), String> {
+    history::append(&state.data_dir, &listen)
+}
+
+/// The whole listening history, for the stats page.
+#[tauri::command]
+async fn get_history(app: AppHandle) -> Vec<history::Listen> {
+    let dir = app.state::<AppState>().data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || history::read(&dir)).await.unwrap_or_default()
+}
+
+/// Delete a library song's file (to the recycle bin / trash on computers) and drop it from the library.
+#[tauri::command]
+fn delete_song(state: State<AppState>, path: String) -> Result<(), String> {
+    let mut tracks = state.tracks.lock().unwrap();
+    if !tracks.iter().any(|t| t.path == path) {
+        return Err("Not a library song".into());
+    }
+    #[cfg(desktop)]
+    trash::delete(&path).map_err(|e| format!("Couldn't move it to the bin: {e}"))?;
+    #[cfg(mobile)]
+    std::fs::remove_file(&path).map_err(|e| format!("Couldn't delete it: {e}"))?;
+    tracks.retain(|t| t.path != path);
+    Ok(())
+}
+
+/// The format and quality of library songs, for the duplicates page.
+#[tauri::command]
+async fn song_quality(app: AppHandle, paths: Vec<String>) -> Result<HashMap<String, serde_json::Value>, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut out = HashMap::new();
+        for p in paths {
+            if let Ok(file) = library_song(&state, &p) {
+                let q = quality::read(&file);
+                out.insert(p, serde_json::json!({ "label": q.label(), "score": q.score(), "lossless": q.lossless, "size": q.size }));
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
+#[derive(Serialize)]
+struct Deduped {
+    /// copies deleted, and the copy each one gave way to
+    removed: Vec<(String, String)>,
+    failed: Vec<String>,
+    settings: Settings,
+}
+
+/// For each group of copies of one song, keep the best file and delete the others (to the bin on
+/// a computer). Favourites, playlists, play counts and ratings of the deleted copies go to the one
+/// that's kept.
+#[tauri::command]
+async fn remove_duplicates(app: AppHandle, groups: Vec<Vec<String>>) -> Result<Deduped, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut removed = Vec::new();
+        let mut failed = Vec::new();
+        for group in groups.iter().filter(|g| g.len() > 1) {
+            let files: Vec<PathBuf> = group.iter().filter_map(|p| library_song(&state, p).ok()).collect();
+            if files.len() < 2 {
+                continue;
+            }
+            let qualities: Vec<quality::Quality> = files.iter().map(|f| quality::read(f)).collect();
+            let keep = files[quality::best(&qualities)].to_string_lossy().into_owned();
+            for f in &files {
+                let path = f.to_string_lossy().into_owned();
+                if path == keep {
+                    continue;
+                }
+                #[cfg(desktop)]
+                let gone = trash::delete(f).map_err(|e| e.to_string());
+                #[cfg(mobile)]
+                let gone = std::fs::remove_file(f).map_err(|e| e.to_string());
+                match gone {
+                    Ok(()) => removed.push((path, keep.clone())),
+                    Err(e) => failed.push(format!("{}: {e}", f.display())),
+                }
+            }
+        }
+        let gave_way: HashMap<&str, &str> = removed.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let settings = {
+            let mut s = state.settings.lock().unwrap();
+            let mut favorites: Vec<String> = Vec::new();
+            for f in &s.favorites {
+                let f = gave_way.get(f.as_str()).map(|k| k.to_string()).unwrap_or_else(|| f.clone());
+                if !favorites.contains(&f) {
+                    favorites.push(f);
+                }
+            }
+            s.favorites = favorites;
+            for p in s.playlists.iter_mut() {
+                let mut songs: Vec<String> = Vec::new();
+                for x in &p.songs {
+                    let x = gave_way.get(x.as_str()).map(|k| k.to_string()).unwrap_or_else(|| x.clone());
+                    if !songs.contains(&x) {
+                        songs.push(x);
+                    }
+                }
+                p.songs = songs;
+            }
+            state.save_settings(&s);
+            s.clone()
+        };
+        {
+            let mut stats = state.stats.lock().unwrap();
+            for (gone, keep) in &removed {
+                if let Some(old) = stats.remove(gone) {
+                    let k = stats.entry(keep.clone()).or_default();
+                    k.plays += old.plays;
+                    k.last = k.last.max(old.last);
+                    k.rating = k.rating.max(old.rating);
+                }
+            }
+            library::save_json(&state.data_dir.join("stats.json"), &*stats);
+        }
+        state.tracks.lock().unwrap().retain(|t| !gave_way.contains_key(t.path.as_str()));
+        Ok(Deduped { removed, failed, settings })
+    })
+    .await
+}
+
 /// How much to turn a song down so songs sound equally loud (dB, 0 or less). Only songs in the
 /// library and SoundCloud songs in the stream cache are read.
 #[tauri::command]
@@ -440,9 +586,26 @@ async fn loudness(app: AppHandle, path: String) -> Result<f32, String> {
 
 /// Lyrics for the playing song (see lyrics.rs).
 #[tauri::command]
-async fn lyrics(app: AppHandle, title: String, artist: String, album: String, duration: f64) -> Result<lyrics::Lyrics, String> {
-    let cache = app.state::<AppState>().data_dir.join("lyrics");
-    blocking(move || lyrics::get(&title, &artist, &album, duration, &cache)).await
+async fn lyrics(app: AppHandle, title: String, artist: String, album: String, duration: f64, path: Option<String>) -> Result<lyrics::Lyrics, String> {
+    let state = app.state::<AppState>();
+    let cache = state.data_dir.join("lyrics");
+    // lyrics saved in a library song's own file come first
+    let file = path.and_then(|p| library_song(&state, &p).ok());
+    blocking(move || match file.as_deref().and_then(lyrics::from_file) {
+        Some(own) => Ok(own),
+        None => lyrics::get(&title, &artist, &album, duration, &cache),
+    })
+    .await
+}
+
+/// Save (or, with empty text, remove) lyrics in a library song's file.
+#[tauri::command]
+async fn save_lyrics(app: AppHandle, path: String, text: String) -> Result<(), String> {
+    blocking(move || {
+        let file = library_song(&app.state::<AppState>(), &path)?;
+        editor::write_lyrics(&file, &text)
+    })
+    .await
 }
 
 /// Show a library song in the system file manager.
@@ -1262,22 +1425,45 @@ fn copied_folder(app: &AppHandle) -> PathBuf {
 #[derive(Serialize)]
 struct Copied {
     copied: usize,
+    /// already on the phone (anywhere, not only from an earlier copy)
     skipped: usize,
     failed: usize,
+    /// songs made favourites here because they are on the computer, and the other way round
+    favorited_here: usize,
+    favorited_there: usize,
 }
 
 /// Phone: copy songs from the computer, one at a time, saying how far along it is.
 #[tauri::command]
-async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>) -> Result<Copied, String> {
+async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>, favorites: Option<Vec<String>>) -> Result<Copied, String> {
     blocking(move || {
         let state = app.state::<AppState>();
         state.copy_cancel.store(false, Ordering::Relaxed);
         let link = computer_of(&state);
         let root = copied_folder(&app);
+        // the computer's favourites (song ids), to bring along and to compare with the phone's
+        let theirs: std::collections::HashSet<String> = favorites.unwrap_or_default().into_iter().collect();
+        let here = state.tracks.lock().unwrap().clone();
         let total: u64 = songs.iter().map(|s| s.size).sum();
-        let (mut before, mut result) = (0u64, Copied { copied: 0, skipped: 0, failed: 0 });
+        let mut result = Copied { copied: 0, skipped: 0, failed: 0, favorited_here: 0, favorited_there: 0 };
+        let mut before = 0u64;
+        // phone paths to make favourites, and computer songs to make favourites there
+        let (mut fav_here, mut fav_there) = (Vec::new(), Vec::new());
+        let ours: std::collections::HashSet<String> = state.settings.lock().unwrap().favorites.iter().cloned().collect();
         let last = Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
         for (i, song) in songs.iter().enumerate() {
+            // already on the phone, wherever it came from: don't copy it again, just match up
+            // the favourites
+            if let Some(t) = computer::already_here(song, &here) {
+                result.skipped += 1;
+                match (theirs.contains(&song.id), ours.contains(&t.path)) {
+                    (true, false) => fav_here.push(t.path.clone()),
+                    (false, true) => fav_there.push(song.id.clone()),
+                    _ => {}
+                }
+                before += song.size;
+                continue;
+            }
             let report = |done: u64| {
                 let mut last = last.lock().unwrap();
                 if last.elapsed().as_millis() >= 200 {
@@ -1286,15 +1472,87 @@ async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>) -> Resu
                 }
             };
             match computer::copy(&link, song, &root, &state.copy_cancel, &report) {
-                Ok(true) => result.copied += 1,
-                Ok(false) => result.skipped += 1,
+                Ok(copied) => {
+                    if copied {
+                        result.copied += 1;
+                    } else {
+                        result.skipped += 1;
+                    }
+                    if theirs.contains(&song.id) {
+                        fav_here.push(computer::destination(&root, song).to_string_lossy().into_owned());
+                    }
+                }
                 Err(e) if e == "Cancelled" => return Err(e),
                 Err(e) if result.copied == 0 && result.failed == 0 && i == 0 => return Err(e), // can't reach it at all
                 Err(_) => result.failed += 1,
             }
             before += song.size;
         }
+        if !fav_here.is_empty() {
+            let mut s = state.settings.lock().unwrap();
+            for p in fav_here {
+                if !s.favorites.contains(&p) {
+                    s.favorites.push(p);
+                    result.favorited_here += 1;
+                }
+            }
+            state.save_settings(&s);
+            let _ = app.emit("favorites-changed", s.favorites.clone());
+        }
+        for id in fav_there {
+            if computer::favorite_there(&link, &id).is_ok() {
+                result.favorited_there += 1;
+            }
+        }
         Ok(result)
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FavSync {
+    /// songs both have
+    shared: usize,
+    favorited_here: usize,
+    favorited_there: usize,
+    favorites: Vec<String>,
+}
+
+/// Phone: match up favourites with the computer, both ways, for every song both have (found by
+/// title, artist and length, wherever it is), without copying anything.
+#[tauri::command]
+async fn computer_sync_favorites(app: AppHandle) -> Result<FavSync, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let link = computer_of(&state);
+        let library = computer::get_json(&link, "/library")?;
+        let songs: Vec<computer::SongToCopy> = serde_json::from_value(library["songs"].clone()).map_err(|e| e.to_string())?;
+        let theirs: std::collections::HashSet<String> =
+            library["favorites"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
+        let here = state.tracks.lock().unwrap().clone();
+        let ours: std::collections::HashSet<String> = state.settings.lock().unwrap().favorites.iter().cloned().collect();
+        let (mut shared, mut fav_here, mut fav_there) = (0, Vec::new(), Vec::new());
+        for song in &songs {
+            let Some(t) = computer::already_here(song, &here) else { continue };
+            shared += 1;
+            match (theirs.contains(&song.id), ours.contains(&t.path)) {
+                (true, false) if !fav_here.contains(&t.path) => fav_here.push(t.path.clone()),
+                (false, true) => fav_there.push(song.id.clone()),
+                _ => {}
+            }
+        }
+        let favorited_here = fav_here.len();
+        let favorites = {
+            let mut s = state.settings.lock().unwrap();
+            s.favorites.extend(fav_here);
+            if favorited_here > 0 {
+                state.save_settings(&s);
+            }
+            s.favorites.clone()
+        };
+        let favorited_there = fav_there.iter().filter(|id| computer::favorite_there(&link, id).is_ok()).count();
+        Ok(FavSync { shared, favorited_here, favorited_there, favorites })
     })
     .await
 }
@@ -1362,6 +1620,137 @@ async fn export_backup(app: AppHandle, include_logins: bool) -> Result<Option<St
     let path = phone_music_folder(&app).join(&name);
     std::fs::write(&path, text).map_err(|e| format!("Couldn't save the backup: {e}"))?;
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[derive(serde::Deserialize)]
+struct Rename {
+    path: String,
+    /// the new file name, without the folder or the extension
+    name: String,
+}
+
+#[derive(Serialize)]
+struct Renamed {
+    /// old path -> new path
+    moved: Vec<(String, String)>,
+    failed: Vec<String>,
+    settings: Settings,
+}
+
+/// Characters no file name may have on any of the systems the music might be copied to.
+fn clean_file_name(name: &str) -> String {
+    let s: String = name.chars().map(|c| if r#"<>:"/\|?*"#.contains(c) || c.is_control() { '_' } else { c }).collect();
+    s.trim().trim_end_matches('.').trim().chars().take(180).collect()
+}
+
+/// Rename song files (in their own folders, keeping the extension), and update everything that
+/// refers to them by path: favourites, playlists and play counts.
+#[tauri::command]
+async fn rename_songs(app: AppHandle, renames: Vec<Rename>) -> Result<Renamed, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut moved = Vec::new();
+        let mut failed = Vec::new();
+        for r in &renames {
+            let old = library_song(&state, &r.path)?;
+            let name = clean_file_name(&r.name);
+            if name.is_empty() {
+                failed.push(format!("{}: the new name is empty", r.path));
+                continue;
+            }
+            let ext = old.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+            let new = old.with_file_name(format!("{name}{ext}"));
+            if new == old {
+                continue;
+            }
+            // a different file already has that name (changing only capitals is fine)
+            let same_file = new.to_string_lossy().to_lowercase() == old.to_string_lossy().to_lowercase();
+            if new.exists() && !same_file {
+                failed.push(format!("{}: there's already a file called that", new.display()));
+                continue;
+            }
+            match std::fs::rename(&old, &new) {
+                Ok(()) => moved.push((r.path.clone(), new.to_string_lossy().into_owned())),
+                Err(e) => failed.push(format!("{}: {e}", old.display())),
+            }
+        }
+        let map: HashMap<&str, &str> = moved.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let swap = |p: &mut String| {
+            if let Some(n) = map.get(p.as_str()) {
+                *p = n.to_string();
+            }
+        };
+        let settings = {
+            let mut s = state.settings.lock().unwrap();
+            s.favorites.iter_mut().for_each(swap);
+            s.playlists.iter_mut().flat_map(|p| p.songs.iter_mut()).for_each(swap);
+            state.save_settings(&s);
+            s.clone()
+        };
+        {
+            let mut stats = state.stats.lock().unwrap();
+            for (a, b) in &moved {
+                if let Some(st) = stats.remove(a) {
+                    stats.insert(b.clone(), st);
+                }
+            }
+            library::save_json(&state.data_dir.join("stats.json"), &*stats);
+        }
+        state.tracks.lock().unwrap().iter_mut().for_each(|t| swap(&mut t.path));
+        Ok(Renamed { moved, failed, settings })
+    })
+    .await
+}
+
+/// Save songs as an .m3u8 playlist file (the user picks where). None when cancelled.
+#[tauri::command]
+async fn export_m3u(app: AppHandle, name: String, songs: Vec<m3u::Entry>) -> Result<Option<String>, String> {
+    let text = m3u::write(&songs);
+    #[cfg(desktop)]
+    {
+        let safe: String = name.chars().map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c }).collect();
+        let picked = app.dialog().file().set_title("Save the playlist").set_file_name(format!("{}.m3u8", safe.trim())).add_filter("Playlist", &["m3u8", "m3u"]).blocking_save_file();
+        let Some(picked) = picked else { return Ok(None) };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        std::fs::write(&path, text).map_err(|e| format!("Couldn't save the playlist: {e}"))?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, name, text);
+        Err("Saving playlist files works on a computer".into())
+    }
+}
+
+#[derive(Serialize)]
+struct M3uImport {
+    name: String,
+    songs: Vec<String>,
+    missing: usize,
+}
+
+/// Read an .m3u / .m3u8 file the user picks and find its songs in the library.
+#[tauri::command]
+async fn import_m3u(app: AppHandle) -> Result<Option<M3uImport>, String> {
+    #[cfg(desktop)]
+    {
+        let picked = app.dialog().file().set_title("Choose a playlist file").add_filter("Playlist", &["m3u8", "m3u"]).blocking_pick_file();
+        let Some(picked) = picked else { return Ok(None) };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(&path).map_err(|e| format!("Couldn't read the playlist: {e}"))?;
+        // .m3u8 is UTF-8; old .m3u files are often Windows-1252, which this reads near enough
+        let text = String::from_utf8(bytes.clone()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
+        let listed = m3u::parse(&text, path.parent().unwrap_or(Path::new("")));
+        let tracks = app.state::<AppState>().tracks.lock().unwrap().clone();
+        let (songs, missing) = m3u::match_library(&listed, &tracks);
+        let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Imported".into());
+        Ok(Some(M3uImport { name, songs, missing }))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Opening playlist files works on a computer".into())
+    }
 }
 
 #[derive(Serialize)]
@@ -1460,6 +1849,48 @@ async fn check_update(app: AppHandle, pretend: Option<String>) -> Result<UpdateI
     .await
 }
 
+/// Whether this copy of the app can install a new version itself: the Windows and macOS apps,
+/// and the Linux AppImage (a .deb or .rpm is updated by the system's package manager instead).
+#[tauri::command]
+fn can_self_update() -> bool {
+    cfg!(desktop) && (!cfg!(target_os = "linux") || std::env::var_os("APPIMAGE").is_some())
+}
+
+/// Download the newest version, check it was signed by this project, install it and restart.
+/// Progress goes out as "update-progress" events: [bytes so far, total bytes or null].
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_updater::UpdaterExt;
+        let update = app
+            .updater()
+            .map_err(|e| e.to_string())?
+            .check()
+            .await
+            .map_err(|e| format!("Couldn't check for the update: {e}"))?
+            .ok_or("This version can't update itself. Download the new one from its release page instead.")?;
+        let mut got = 0usize;
+        let progress = app.clone();
+        update
+            .download_and_install(
+                move |chunk, total| {
+                    got += chunk;
+                    let _ = progress.emit("update-progress", (got, total));
+                },
+                || {},
+            )
+            .await
+            .map_err(|e| format!("Couldn't install the update: {e}"))?;
+        app.restart();
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Phones update through AltStore, SideStore or a new .apk".into())
+    }
+}
+
 #[cfg(test)]
 mod update_tests {
     use super::*;
@@ -1542,6 +1973,62 @@ async fn save_song_tags(
     .await
 }
 
+/// Change some fields of several songs at once (editing an album, or tagging it from
+/// MusicBrainz): each song gets its own changes, and all get the same cover change.
+#[derive(serde::Deserialize)]
+struct SongChanges {
+    path: String,
+    changes: editor::TagChanges,
+}
+
+#[tauri::command]
+async fn save_many_tags(app: AppHandle, songs: Vec<SongChanges>, cover: editor::CoverEdit) -> Result<(), String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut failed = Vec::new();
+        for s in &songs {
+            let path = library_song(&state, &s.path)?;
+            if let Err(e) = editor::change(&path, &s.changes, &cover) {
+                failed.push(e);
+            }
+        }
+        match failed.len() {
+            0 => Ok(()),
+            n if n == songs.len() => Err(failed.swap_remove(0)),
+            n => Err(format!("Saved, but {n} of the {} songs couldn't be changed: {}", songs.len(), failed[0])),
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+async fn mb_search_song(title: String, artist: String, album: String) -> Result<Vec<musicbrainz::SongMatch>, String> {
+    blocking(move || musicbrainz::search_song(&title, &artist, &album)).await
+}
+
+#[tauri::command]
+async fn mb_search_album(album: String, artist: String) -> Result<Vec<musicbrainz::AlbumMatch>, String> {
+    blocking(move || musicbrainz::search_album(&album, &artist)).await
+}
+
+#[tauri::command]
+async fn mb_album_tracks(release_id: String) -> Result<Vec<musicbrainz::AlbumTrack>, String> {
+    blocking(move || musicbrainz::album_tracks(&release_id)).await
+}
+
+/// A release's cover from the Cover Art Archive, saved for the editor to use: the file and a
+/// preview, or None when the release has no cover there.
+#[tauri::command]
+async fn mb_cover(app: AppHandle, release_id: String) -> Result<Option<serde_json::Value>, String> {
+    let dir = app.state::<AppState>().data_dir.join("covers-online");
+    blocking(move || {
+        let Some(path) = musicbrainz::fetch_cover(&release_id, &dir)? else { return Ok(None) };
+        let preview = editor::preview(&std::fs::read(&path).map_err(|e| e.to_string())?)?;
+        Ok(Some(serde_json::json!({ "path": path.to_string_lossy(), "preview": preview })))
+    })
+    .await
+}
+
 #[tauri::command]
 async fn sc_waveform(url: String, bins: usize) -> Result<Vec<f32>, String> {
     blocking(move || soundcloud::waveform(&url, bins)).await
@@ -1567,6 +2054,8 @@ async fn scan(app: AppHandle, state: State<'_, AppState>, full: bool) -> Result<
     };
     let cover_dir = state.cover_dir();
     let emitter = app.clone();
+    #[cfg(desktop)]
+    watch::watch(&app, &folders);
     let result = tauri::async_runtime::spawn_blocking(move || {
         library::scan(&folders, prefer_tags, cache, &cover_dir, |done, total| {
             let _ = emitter.emit("scan-progress", (done, total));
@@ -1590,11 +2079,80 @@ async fn scan(app: AppHandle, state: State<'_, AppState>, full: bool) -> Result<
     Ok(tracks)
 }
 
+/// The icon in the system tray (the notification area on Windows, the menu bar on a Mac): its
+/// menu plays, pauses and skips, and clicking it brings the window back. The frontend gets
+/// "tray" events with the menu item's id.
+#[cfg(desktop)]
+fn make_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    let item = |id: &str, text: &str| MenuItem::with_id(app, id, text, true, None::<&str>);
+    let menu = Menu::with_items(
+        app,
+        &[
+            &item("playPause", "Play / pause")?,
+            &item("next", "Next song")?,
+            &item("prev", "Previous song")?,
+            &PredefinedMenuItem::separator(app)?,
+            &item("show", "Show yuuricloud")?,
+            &item("quit", "Quit")?,
+        ],
+    )?;
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("yuuricloud")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, e| match e.id().as_ref() {
+            "show" => show_window(app),
+            id => {
+                let _ = app.emit("tray", id);
+            }
+        })
+        .on_tray_icon_event(|tray, e| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+                show_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+#[cfg(desktop)]
+fn show_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// The tray icon's tooltip: what's playing.
+#[tauri::command]
+fn tray_tooltip(app: AppHandle, text: String) {
+    #[cfg(desktop)]
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(text));
+    }
+    #[cfg(mobile)]
+    let _ = (app, text);
+}
+
+/// Really quit (closing the window may only hide it, with "keep playing in the tray" on).
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_deep_link::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -1639,6 +2197,10 @@ pub fn run() {
             });
             #[cfg(mobile)]
             open_links(app);
+            #[cfg(desktop)]
+            if let Err(e) = make_tray(app) {
+                eprintln!("no tray icon: {e}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1666,6 +2228,26 @@ pub fn run() {
             get_stats,
             about,
             record_play,
+            log_listen,
+            set_rating,
+            tray_tooltip,
+            rename_songs,
+            save_lyrics,
+            quit_app,
+            export_m3u,
+            import_m3u,
+            get_history,
+            delete_song,
+            song_quality,
+            remove_duplicates,
+            computer_sync_favorites,
+            save_many_tags,
+            can_self_update,
+            install_update,
+            mb_search_song,
+            mb_search_album,
+            mb_album_tracks,
+            mb_cover,
             loudness,
             lyrics,
             reveal_file,

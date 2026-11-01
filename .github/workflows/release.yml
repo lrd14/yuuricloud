@@ -50,10 +50,27 @@ jobs:
 
       - run: npm ci
 
+      # With the TAURI_SIGNING_PRIVATE_KEY secret set, the build also makes signed update files and
+      # a latest.json, which the app's "Install" button downloads from. Without it, the release is
+      # made the same as before and the app sends people to the download page instead.
+      - name: Make update files when there's a key to sign them
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            jq '.bundle.createUpdaterArtifacts = true' src-tauri/tauri.conf.json > conf.tmp && mv conf.tmp src-tauri/tauri.conf.json
+          else
+            echo "::warning::No TAURI_SIGNING_PRIVATE_KEY secret: this release can't be installed by the app's Install button"
+          fi
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          updaterJsonPreferNsis: true
           tagName: v__VERSION__
           releaseName: yuuricloud v__VERSION__
           releaseBody: |

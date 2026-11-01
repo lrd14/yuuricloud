@@ -1,6 +1,6 @@
 [package]
 name = "yuuricloud"
-version = "0.6.0"
+version = "0.7.0"
 description = "A small local music player"
 edition = "2021"
 
@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "image-png"] }
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "image-png", "tray-icon"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -39,6 +39,12 @@ soulseek-rs-lib = "19.1"
 # The computer's side of "Let your phone connect" (share.rs).
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 tiny_http = "0.12"
+# Duplicates go to the recycle bin / trash rather than being deleted outright.
+trash = "5"
+# The "Install" update button: download, check the signature of and install a new version.
+tauri-plugin-updater = "2"
+# Notices new songs in the library folders (watch.rs).
+notify = "8"
 
 # Opens the app from the QR code a computer shows to sign this phone in to SoundCloud.
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]

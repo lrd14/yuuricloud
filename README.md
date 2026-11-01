@@ -37,8 +37,13 @@ and iPad.
 - **SoundCloud**: play your likes, your playlists and SoundCloud search in the same player, and download songs.
 - **Soulseek**: search the Soulseek network and download music straight into your library.
 - **Last.fm** scrobbling and a **Discord** "Listening to" status.
-- **Looks how you like**: accent colors that follow the album cover, a SoundCloud-style waveform seek bar, compact
-  lists, animations you can tone down or turn off.
+- **Looks how you like**: dark or light, accent colors that follow the album cover, a SoundCloud-style waveform
+  seek bar, compact lists, animations you can tone down or turn off, and a mini player.
+- **Keeps your library tidy**: edit song and album info, fill in what's missing from MusicBrainz, and find
+  duplicates.
+- **Listening stats**: what you played most this week, month, year or ever.
+- **Find anything**: search filters like `genre:jazz year:1990-1999 rating>=4`, smart lists made from them,
+  star ratings, genres and a folder view.
 - **iPhone and iPad** app with your music, SoundCloud and Soulseek, made for one hand on a phone and three panels
   on an iPad or an unfolded iPhone Duo.
 
@@ -96,9 +101,11 @@ and can refresh without the computer.
 
 ### Updating
 
-When a new version is out, an **Update** button shows in the title bar (turn the check off in Settings →
-Playback). It opens the release page, where you download and install the new version over the old one. Your
-library and settings are kept.
+When a new version is out, a button shows in the title bar (turn the check off in Settings → Playback). On
+Windows, macOS and the Linux AppImage it says **Install**: it downloads the new version, checks it really comes
+from this project, installs it and restarts. Elsewhere (the `.deb` and `.rpm`, and versions before 0.7) it opens
+the release page, where you download and install the new version over the old one. Your library and settings
+are kept either way.
 
 ## Getting started
 
@@ -277,17 +284,28 @@ The status shows the album cover from Last.fm when Last.fm knows the album. Comp
 
 ## Using yuuricloud
 
-**Computer shortcuts**
+**Computer shortcuts** (change any of them in Settings → Shortcuts)
 
 | Key | Does |
 | --- | --- |
 | Space | Play / pause |
 | Ctrl + ← / → | Previous / next song |
+| ← / → | Back / forward 5 seconds |
+| Ctrl + ↑ / ↓ | Volume up / down |
+| M | Mute |
+| L | Favourite the playing song |
+| S / R | Shuffle / repeat |
+| N / Q | Now playing / queue |
+| Ctrl + M | Mini player |
 | ↑ / ↓, then Enter | Pick a song and play it |
 | Ctrl + F | Search |
 | Ctrl + L | Show the playing song |
+| Ctrl + I | Listening stats |
 | F5 | Rescan the library |
 | Ctrl + , | Settings |
+
+On a Mac, Ctrl is ⌘. The keyboard's media keys, and the system's own controls (the Windows volume overlay, macOS
+Now Playing, the lock screen on a phone), work too.
 
 **The player:** the shuffle button switches between **off**, **shuffle** (every song once, in a random order) and
 **random** (the dice: each next song is picked afresh, so songs can come up again). The ♥ next to the playing song
@@ -317,13 +335,71 @@ next song starts the moment one ends, with no gap (the iPhone does that too). **
 down so everything plays at about the same level. The **Equalizer** has presets (bass boost, vocal, rock and
 more) and ten bands to drag.
 
+**Mini player:** the button next to the volume (or Ctrl + M) shrinks the window to just the player, on top of
+other windows. The same button makes it big again.
+
+**Listening stats:** click **Listening stats** under the smart lists for how long you listened, your top
+artists, songs and albums, your longest streak and busiest day, for this week, month, year or all time. It counts
+from version 0.7 on.
+
+**Edit song and album info:** right-click a song → **Edit song info…**, or an album → **Edit album info…** to
+change the album, artists, year, disc and cover of all its songs at once. **Find online…** looks the song or
+album up on [MusicBrainz](https://musicbrainz.org): pick the right one to fill in the title, artists, album,
+year and track numbers, and tick **Use its cover too** for its cover from the Cover Art Archive. For an album it
+also matches each song to the album's track list, fixing titles and track numbers.
+
+**Search filters:** besides plain words, the search box understands `artist:`, `album:`, `title:`, `genre:`,
+`folder:`, `year:1998` (or `year:1990-1999`), `plays>10`, `rating>=4`, `length<3:00`, `added<30` (added in the
+last 30 days), `played<7`, `fav:yes` and file types like `flac`. Put words in "quotes" to keep them together, and
+a `-` in front to leave things out: `genre:ambient -live`. Hover over the search box for a reminder.
+
+**Your own smart lists:** **＋ New smart list** under the smart lists turns any search into a list that keeps
+itself up to date, like `genre:jazz plays:0` or `year:1990-1999 rating>=4`. Right-click it to change or delete it.
+
+**Ratings:** right-click a song to give it 1 to 5 stars, or click the stars in the now-playing view. Click the
+same star again to take the rating off. Search with `rating>=4`.
+
+**Genres and folders:** **Genres** (under the smart lists) shows every genre in your library; click one to see
+its songs. Add or change genres in Edit song info or Edit album info. **Folders** lets you browse your music as it
+is on disk, and play a whole folder.
+
+**Song radio:** right-click a song or an artist → **Start radio** for endless music like it from your own
+library: that artist, and artists Last.fm says are similar (or the same genre).
+
+**.m3u playlists:** right-click a playlist or smart list → **Save as .m3u…** to use it in another player, and
+**＋ Open an .m3u playlist…** to bring one in. Songs are found by their path, or by file name if the music has
+moved.
+
+**New songs show up by themselves:** on a computer, songs you add to (or remove from) your music folders appear
+in the library a few seconds later, with no rescan.
+
+**In the now-playing view:** **speed** (0.5× to 2×, keeping the pitch or not), an **A–B loop** (click once where
+the part starts and again where it ends; ✕ stops it), a **visualizer** (bars or a wave, on a computer) and
+**Edit lyrics**: type or paste lyrics, and to time them, play the song and press **Stamp** (or Ctrl+Enter) as
+each line is sung. Lyrics are saved into the song file, so other players show them too, and they're used before
+looking online.
+
+**Tray icon:** on a computer, yuuricloud has an icon in the tray (by the clock, or in the menu bar on a Mac) to
+play, pause, skip and show the window. Turn on Settings → Appearance → **Keep playing in the tray when closed** to
+keep the music going with the window closed.
+
+**Discord:** the status has a button: **Listen on SoundCloud** for SoundCloud songs, or the song on Last.fm.
+
+**Rename files:** right-click an album → **Rename files…** to name its files from their info, like
+`{track} - {title}` → `03 - Roygbiv.flac`. You see every new name before anything changes; favourites,
+playlists, ratings and play counts follow the files.
+
+**Find duplicates:** under the smart lists. It lists songs that are in your library more than once (the same
+artist and title, about the same length, even as different formats or with "(Remastered)" on the end), so you
+can play each copy and delete the ones you don't want (on a computer they go to the recycle bin / trash).
+
 Right-click a song for **Play next**, **favourites** (♥ Favourites appears at the top of the artist list), **Edit
 song info…** and more. Click the song name in the player to jump to it in the library.
 
 **On a phone** the library shows one panel at a time: tap an artist, then an album, then a song to play it; the
 back arrow goes up a level. Hold a song for its menu.
 
-**Settings** has a lot to make it yours: accent color (or colors from the album cover), background blur and
+**Settings** has a lot to make it yours: a dark or light theme (or follow the system), accent color (or colors from the album cover), background blur and
 darkness, cover and interface size, a compact song list, animations, the waveform seek bar, single-click play,
 fades, and **Resume where you left off**, which reopens the same song, queue and view you had when you closed the
 app.
@@ -354,6 +430,11 @@ With the computer and the iPhone on the same Wi-Fi:
 
 Pairing uses a code made fresh each time sharing is turned on; nothing works without it, and sharing stays off
 until you turn it on.
+
+**Sync favourites:** on the phone, Settings → Integrations → Phone & computer → **Sync favourites** makes your
+favourites the same on both, for every song the phone and the computer both have (matched by title, artist and
+length, wherever the files are). Nothing is copied and no favourite is taken away: a song that's a favourite on
+either one becomes a favourite on both.
 
 ## Troubleshooting
 
