@@ -42,6 +42,8 @@ and iPad.
 - **Keeps your library tidy**: edit song and album info, fill in what's missing from MusicBrainz, and find
   duplicates.
 - **Listening stats**: what you played most this week, month, year or ever.
+- **Find anything**: search filters like `genre:jazz year:1990-1999 rating>=4`, smart lists made from them,
+  star ratings, genres and a folder view.
 - **iPhone and iPad** app with your music, SoundCloud and Soulseek, made for one hand on a phone and three panels
   on an iPad or an unfolded iPhone Duo.
 
@@ -345,6 +347,47 @@ change the album, artists, year, disc and cover of all its songs at once. **Find
 album up on [MusicBrainz](https://musicbrainz.org): pick the right one to fill in the title, artists, album,
 year and track numbers, and tick **Use its cover too** for its cover from the Cover Art Archive. For an album it
 also matches each song to the album's track list, fixing titles and track numbers.
+
+**Search filters:** besides plain words, the search box understands `artist:`, `album:`, `title:`, `genre:`,
+`folder:`, `year:1998` (or `year:1990-1999`), `plays>10`, `rating>=4`, `length<3:00`, `added<30` (added in the
+last 30 days), `played<7`, `fav:yes` and file types like `flac`. Put words in "quotes" to keep them together, and
+a `-` in front to leave things out: `genre:ambient -live`. Hover over the search box for a reminder.
+
+**Your own smart lists:** **＋ New smart list** under the smart lists turns any search into a list that keeps
+itself up to date, like `genre:jazz plays:0` or `year:1990-1999 rating>=4`. Right-click it to change or delete it.
+
+**Ratings:** right-click a song to give it 1 to 5 stars, or click the stars in the now-playing view. Click the
+same star again to take the rating off. Search with `rating>=4`.
+
+**Genres and folders:** **Genres** (under the smart lists) shows every genre in your library; click one to see
+its songs. Add or change genres in Edit song info or Edit album info. **Folders** lets you browse your music as it
+is on disk, and play a whole folder.
+
+**Song radio:** right-click a song or an artist → **Start radio** for endless music like it from your own
+library: that artist, and artists Last.fm says are similar (or the same genre).
+
+**.m3u playlists:** right-click a playlist or smart list → **Save as .m3u…** to use it in another player, and
+**＋ Open an .m3u playlist…** to bring one in. Songs are found by their path, or by file name if the music has
+moved.
+
+**New songs show up by themselves:** on a computer, songs you add to (or remove from) your music folders appear
+in the library a few seconds later, with no rescan.
+
+**In the now-playing view:** **speed** (0.5× to 2×, keeping the pitch or not), an **A–B loop** (click once where
+the part starts and again where it ends; ✕ stops it), a **visualizer** (bars or a wave, on a computer) and
+**Edit lyrics**: type or paste lyrics, and to time them, play the song and press **Stamp** (or Ctrl+Enter) as
+each line is sung. Lyrics are saved into the song file, so other players show them too, and they're used before
+looking online.
+
+**Tray icon:** on a computer, yuuricloud has an icon in the tray (by the clock, or in the menu bar on a Mac) to
+play, pause, skip and show the window. Turn on Settings → Appearance → **Keep playing in the tray when closed** to
+keep the music going with the window closed.
+
+**Discord:** the status has a button: **Listen on SoundCloud** for SoundCloud songs, or the song on Last.fm.
+
+**Rename files:** right-click an album → **Rename files…** to name its files from their info, like
+`{track} - {title}` → `03 - Roygbiv.flac`. You see every new name before anything changes; favourites,
+playlists, ratings and play counts follow the files.
 
 **Find duplicates:** under the smart lists. It lists songs that are in your library more than once (the same
 artist and title, about the same length, even as different formats or with "(Remastered)" on the end), so you
