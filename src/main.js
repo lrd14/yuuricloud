@@ -4845,7 +4845,11 @@ $("run-setup").addEventListener("click", () => {
 // Once at start and then twice a day, ask GitHub whether a newer release is out. If so, an Update
 // button appears in the title bar that opens the release page; the × skips that version.
 
-const update = { info: null, error: "", checking: false };
+const update = { info: null, error: "", checking: false, canInstall: false, installing: null };
+invoke("can_self_update").then((can) => {
+  update.canInstall = !!can;
+  renderUpdate();
+}, () => {});
 
 async function checkForUpdate(manual = false) {
   if (update.checking) return;
@@ -4857,7 +4861,7 @@ async function checkForUpdate(manual = false) {
     const { newer, latest } = update.info;
     if (newer && (manual || latest !== prefs.skipVersion)) {
       if (manual && latest === prefs.skipVersion) setPref("skipVersion", ""); // asked by hand: show it again
-      setStatus(`yuuricloud ${latest} is out — click Update at the top to get it`, 8000);
+      setStatus(`yuuricloud ${latest} is out — click ${update.canInstall ? "Install" : "Update"} at the top to get it`, 8000);
     } else if (manual) {
       setStatus(newer ? "" : "You have the newest version", 4000);
     }
@@ -4874,8 +4878,12 @@ function renderUpdate() {
   const show = !!info?.newer && info.latest !== prefs.skipVersion;
   $("update-pill").hidden = !show;
   if (show) {
-    $("update-open").textContent = `Update to ${info.latest}`;
-    $("update-open").title = `yuuricloud ${info.latest} is out (you have ${info.current}). Opens its download page.`;
+    const pct = update.installing;
+    $("update-open").textContent = pct != null ? (pct >= 0 ? `Downloading… ${pct}%` : "Downloading…") : `${update.canInstall ? "Install" : "Update to"} ${info.latest}`;
+    $("update-open").disabled = pct != null;
+    $("update-open").title = update.canInstall
+      ? `yuuricloud ${info.latest} is out (you have ${info.current}). Downloads it, installs it and restarts.`
+      : `yuuricloud ${info.latest} is out (you have ${info.current}). Opens its download page.`;
   }
   const status = $("update-status");
   status.className = "hint" + (show ? " ok" : update.error ? " err" : "");
@@ -4887,7 +4895,26 @@ function renderUpdate() {
   $("update-check").disabled = update.checking;
 }
 
-$("update-open").addEventListener("click", () => update.info && window.__TAURI__.opener.openUrl(update.info.url));
+$("update-open").addEventListener("click", async () => {
+  if (!update.info || update.installing != null) return;
+  if (!update.canInstall) return window.__TAURI__.opener.openUrl(update.info.url);
+  update.installing = -1;
+  renderUpdate();
+  saveSession();
+  const stop = await listen("update-progress", ({ payload: [got, total] }) => {
+    update.installing = total ? Math.floor((got / total) * 100) : -1;
+    renderUpdate();
+  });
+  try {
+    await invoke("install_update"); // restarts the app when it worked
+  } catch (e) {
+    setStatus(`${e} — opening the download page instead.`, 8000);
+    window.__TAURI__.opener.openUrl(update.info.url);
+  }
+  stop();
+  update.installing = null;
+  renderUpdate();
+});
 $("update-skip").addEventListener("click", () => {
   if (!update.info) return;
   setPref("skipVersion", update.info.latest);

@@ -41,6 +41,8 @@ soulseek-rs-lib = "19.1"
 tiny_http = "0.12"
 # Duplicates go to the recycle bin / trash rather than being deleted outright.
 trash = "5"
+# The "Install" update button: download, check the signature of and install a new version.
+tauri-plugin-updater = "2"
 
 # Opens the app from the QR code a computer shows to sign this phone in to SoundCloud.
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]

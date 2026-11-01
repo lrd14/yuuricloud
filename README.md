@@ -37,8 +37,11 @@ and iPad.
 - **SoundCloud**: play your likes, your playlists and SoundCloud search in the same player, and download songs.
 - **Soulseek**: search the Soulseek network and download music straight into your library.
 - **Last.fm** scrobbling and a **Discord** "Listening to" status.
-- **Looks how you like**: accent colors that follow the album cover, a SoundCloud-style waveform seek bar, compact
-  lists, animations you can tone down or turn off.
+- **Looks how you like**: dark or light, accent colors that follow the album cover, a SoundCloud-style waveform
+  seek bar, compact lists, animations you can tone down or turn off, and a mini player.
+- **Keeps your library tidy**: edit song and album info, fill in what's missing from MusicBrainz, and find
+  duplicates.
+- **Listening stats**: what you played most this week, month, year or ever.
 - **iPhone and iPad** app with your music, SoundCloud and Soulseek, made for one hand on a phone and three panels
   on an iPad or an unfolded iPhone Duo.
 
@@ -96,9 +99,11 @@ and can refresh without the computer.
 
 ### Updating
 
-When a new version is out, an **Update** button shows in the title bar (turn the check off in Settings →
-Playback). It opens the release page, where you download and install the new version over the old one. Your
-library and settings are kept.
+When a new version is out, a button shows in the title bar (turn the check off in Settings → Playback). On
+Windows, macOS and the Linux AppImage it says **Install**: it downloads the new version, checks it really comes
+from this project, installs it and restarts. Elsewhere (the `.deb` and `.rpm`, and versions before 0.7) it opens
+the release page, where you download and install the new version over the old one. Your library and settings
+are kept either way.
 
 ## Getting started
 
@@ -277,17 +282,28 @@ The status shows the album cover from Last.fm when Last.fm knows the album. Comp
 
 ## Using yuuricloud
 
-**Computer shortcuts**
+**Computer shortcuts** (change any of them in Settings → Shortcuts)
 
 | Key | Does |
 | --- | --- |
 | Space | Play / pause |
 | Ctrl + ← / → | Previous / next song |
+| ← / → | Back / forward 5 seconds |
+| Ctrl + ↑ / ↓ | Volume up / down |
+| M | Mute |
+| L | Favourite the playing song |
+| S / R | Shuffle / repeat |
+| N / Q | Now playing / queue |
+| Ctrl + M | Mini player |
 | ↑ / ↓, then Enter | Pick a song and play it |
 | Ctrl + F | Search |
 | Ctrl + L | Show the playing song |
+| Ctrl + I | Listening stats |
 | F5 | Rescan the library |
 | Ctrl + , | Settings |
+
+On a Mac, Ctrl is ⌘. The keyboard's media keys, and the system's own controls (the Windows volume overlay, macOS
+Now Playing, the lock screen on a phone), work too.
 
 **The player:** the shuffle button switches between **off**, **shuffle** (every song once, in a random order) and
 **random** (the dice: each next song is picked afresh, so songs can come up again). The ♥ next to the playing song
@@ -317,13 +333,30 @@ next song starts the moment one ends, with no gap (the iPhone does that too). **
 down so everything plays at about the same level. The **Equalizer** has presets (bass boost, vocal, rock and
 more) and ten bands to drag.
 
+**Mini player:** the button next to the volume (or Ctrl + M) shrinks the window to just the player, on top of
+other windows. The same button makes it big again.
+
+**Listening stats:** click **Listening stats** under the smart lists for how long you listened, your top
+artists, songs and albums, your longest streak and busiest day, for this week, month, year or all time. It counts
+from version 0.7 on.
+
+**Edit song and album info:** right-click a song → **Edit song info…**, or an album → **Edit album info…** to
+change the album, artists, year, disc and cover of all its songs at once. **Find online…** looks the song or
+album up on [MusicBrainz](https://musicbrainz.org): pick the right one to fill in the title, artists, album,
+year and track numbers, and tick **Use its cover too** for its cover from the Cover Art Archive. For an album it
+also matches each song to the album's track list, fixing titles and track numbers.
+
+**Find duplicates:** under the smart lists. It lists songs that are in your library more than once (the same
+artist and title, about the same length, even as different formats or with "(Remastered)" on the end), so you
+can play each copy and delete the ones you don't want (on a computer they go to the recycle bin / trash).
+
 Right-click a song for **Play next**, **favourites** (♥ Favourites appears at the top of the artist list), **Edit
 song info…** and more. Click the song name in the player to jump to it in the library.
 
 **On a phone** the library shows one panel at a time: tap an artist, then an album, then a song to play it; the
 back arrow goes up a level. Hold a song for its menu.
 
-**Settings** has a lot to make it yours: accent color (or colors from the album cover), background blur and
+**Settings** has a lot to make it yours: a dark or light theme (or follow the system), accent color (or colors from the album cover), background blur and
 darkness, cover and interface size, a compact song list, animations, the waveform seek bar, single-click play,
 fades, and **Resume where you left off**, which reopens the same song, queue and view you had when you closed the
 app.

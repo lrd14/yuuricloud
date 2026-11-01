@@ -1490,6 +1490,48 @@ async fn check_update(app: AppHandle, pretend: Option<String>) -> Result<UpdateI
     .await
 }
 
+/// Whether this copy of the app can install a new version itself: the Windows and macOS apps,
+/// and the Linux AppImage (a .deb or .rpm is updated by the system's package manager instead).
+#[tauri::command]
+fn can_self_update() -> bool {
+    cfg!(desktop) && (!cfg!(target_os = "linux") || std::env::var_os("APPIMAGE").is_some())
+}
+
+/// Download the newest version, check it was signed by this project, install it and restart.
+/// Progress goes out as "update-progress" events: [bytes so far, total bytes or null].
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_updater::UpdaterExt;
+        let update = app
+            .updater()
+            .map_err(|e| e.to_string())?
+            .check()
+            .await
+            .map_err(|e| format!("Couldn't check for the update: {e}"))?
+            .ok_or("This version can't update itself. Download the new one from its release page instead.")?;
+        let mut got = 0usize;
+        let progress = app.clone();
+        update
+            .download_and_install(
+                move |chunk, total| {
+                    got += chunk;
+                    let _ = progress.emit("update-progress", (got, total));
+                },
+                || {},
+            )
+            .await
+            .map_err(|e| format!("Couldn't install the update: {e}"))?;
+        app.restart();
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Phones update through AltStore, SideStore or a new .apk".into())
+    }
+}
+
 #[cfg(test)]
 mod update_tests {
     use super::*;
@@ -1681,6 +1723,8 @@ pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_deep_link::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -1756,6 +1800,8 @@ pub fn run() {
             get_history,
             delete_song,
             save_many_tags,
+            can_self_update,
+            install_update,
             mb_search_song,
             mb_search_album,
             mb_album_tracks,
