@@ -122,8 +122,8 @@ const inArtist = (t) =>
     : artistKey(t) === state.artist);
 
 // Smart lists, made from how often and when songs were played (see record_play in lib.rs)
-const plays = (t) => state.stats[t.path]?.plays || 0;
-const lastPlayed = (t) => state.stats[t.path]?.last || 0;
+const plays = (t) => state.stats?.[t.path]?.plays || 0;
+const lastPlayed = (t) => state.stats?.[t.path]?.last || 0;
 const SMART = [
   { id: "added", name: "Recently added", list: (ts) => [...ts].sort((a, b) => b.mtime - a.mtime).slice(0, 100) },
   { id: "most", name: "Most played", list: (ts) => ts.filter(plays).sort((a, b) => plays(b) - plays(a) || lastPlayed(b) - lastPlayed(a)).slice(0, 100) },
@@ -223,7 +223,7 @@ async function load() {
   state.tracks = snap.tracks;
   state.favorites = new Set(snap.settings.favorites || []);
   state.playlists = snap.settings.playlists || [];
-  state.stats = await invoke("get_stats").catch(() => ({}));
+  state.stats = (await invoke("get_stats").catch(() => null)) || {};
   const linuxDefaults = platform === "linux" ? { blur: false, tint: 0.96 } : {}; // no compositor blur there
   prefs = { ...DEFAULT_PREFS, ...linuxDefaults, ...(snap.settings.ui || {}) };
   applyPrefs();
@@ -1532,6 +1532,7 @@ function renderIntegrations() {
   renderScSettings();
   renderDownloadSettings();
   renderSlskSettings();
+  renderPcSettings();
 }
 
 function fillIntegrationFields() {
@@ -2531,6 +2532,262 @@ el.artistList.addEventListener("contextmenu", (e) => {
     ? [play, "-", { label: "Rename…", icon: "i-edit", action: () => renamePlaylist(p) }, { label: "Delete playlist…", icon: "i-stop", action: () => deletePlaylist(p) }]
     : [play, ...(specialList(key) ? [] : [{ label: "Artist page", icon: "i-note", action: () => openPage("artist", key) }]), "-", ...playlistMenu(songs())]);
 });
+
+// ------------------------------------------------------ phone & computer
+
+// Computer: "Let your phone connect" (share.rs), and reporting what's playing for the remote
+let share = null; // { address, link, qr } while it's on
+let shareTimer = null;
+function renderPcSettings() {
+  const pc = state.settings.computer || {};
+  const status = $("pc-status");
+  if (ios) {
+    status.textContent = pc.address ? `Paired with ${pc.name}` : "Not paired";
+    status.className = "hint" + (pc.address ? " ok" : "");
+    $("pc-status-phone").textContent = pc.address ? `${pc.name} · ${pc.address}` : "Not paired";
+    $("pc-status-phone").className = status.className;
+    $("pc-unlink").hidden = !pc.address;
+    $("pc-pair").hidden = !!pc.address;
+    $("pc-actions").hidden = !pc.address;
+    $("remote-btn").hidden = !pc.address;
+    document.body.classList.toggle("paired", !!pc.address);
+    return;
+  }
+  status.textContent = share ? `On · ${share.address}` : "Off";
+  status.className = "hint" + (share ? " ok" : "");
+  $("share-on").checked = !!share;
+  $("share-code").hidden = !share;
+  if (share) $("share-qr").src = share.qr;
+}
+$("share-on").addEventListener("change", async (e) => {
+  try {
+    share = await invoke("share_set", { on: e.target.checked });
+  } catch (err) {
+    share = null;
+    setStatus(String(err), 6000);
+  }
+  clearInterval(shareTimer);
+  if (share) {
+    reportNow();
+    shareTimer = setInterval(reportNow, 1000);
+  }
+  renderIntegrations();
+});
+$("share-copy").addEventListener("click", () => share && copyText(share.link, "Code copied — paste it in yuuricloud on your phone"));
+function reportNow() {
+  const t = current();
+  invoke("remote_report", { now: t ? {
+    path: t.path, title: t.title, artist: t.artist, album: t.album || "", cover: t.sc ? t.cover : "",
+    playing: !audio.paused, position: audio.currentTime || 0, duration: audio.duration || t.duration || 0, volume: baseVolume,
+  } : {} }).catch(() => {});
+}
+listen("remote-command", ({ payload: { command, value } }) => {
+  if (command === "toggle") togglePlay();
+  if (command === "next") next();
+  if (command === "prev") prev();
+  if (command === "seek" && value != null && current()) audio.currentTime = value;
+  if (command === "volume" && value != null) {
+    baseVolume = Math.min(1, Math.max(0, value));
+    el.volume.value = baseVolume;
+    setRangeFill(el.volume);
+    fadeId++;
+    audio.volume = vol();
+    invoke("set_volume", { volume: baseVolume });
+  }
+  setTimeout(reportNow, 150);
+});
+
+// Phone: pairing
+async function pairComputer(code) {
+  try {
+    state.settings = await invoke("computer_link", { code });
+    $("pc-code").value = "";
+    setStatus(`Paired with ${state.settings.computer.name}`, 3000);
+  } catch (e) {
+    $("pc-status-phone").className = "hint err";
+    $("pc-status-phone").textContent = String(e);
+    return;
+  }
+  renderIntegrations();
+}
+$("pc-link").addEventListener("click", () => pairComputer($("pc-code").value));
+$("pc-unlink").addEventListener("click", async () => {
+  state.settings = await invoke("computer_unlink");
+  renderIntegrations();
+});
+listen("computer-linked", ({ payload }) => {
+  state.settings = payload;
+  setStatus(`Paired with ${payload.computer.name}`, 3000);
+  renderIntegrations();
+});
+
+// Phone: copying music from the computer
+const copy = { library: null, picks: new Map(), busy: false }; // picks: key -> songs
+const fmtSize = (n) => fmtBytes(n);
+function showCopy(open) {
+  $("copy").hidden = !open;
+  document.body.classList.toggle("show-page", open);
+  if (open) loadCopyList();
+}
+$("pc-copy").addEventListener("click", () => {
+  closeSettings();
+  showCopy(true);
+});
+$("copy-close").addEventListener("click", () => !copy.busy && showCopy(false));
+
+async function loadCopyList() {
+  copy.picks.clear();
+  $("copy-list").innerHTML = "";
+  $("copy-note").textContent = `Looking at ${state.settings.computer.name}…`;
+  try {
+    copy.library = await invoke("computer_library");
+  } catch (e) {
+    $("copy-note").textContent = String(e);
+    return;
+  }
+  const lib = copy.library, byId = new Map(lib.songs.map((t) => [t.id, t]));
+  const ids = (list) => list.map((id) => byId.get(id)).filter(Boolean);
+  const albums = new Map();
+  for (const t of lib.songs) {
+    const k = `${t.albumArtist}\0${t.album}`;
+    if (!albums.has(k)) albums.set(k, []);
+    albums.get(k).push(t);
+  }
+  copy.groups = [
+    ...(lib.favorites.length ? [{ key: "fav", name: "♥ Favourites", songs: ids(lib.favorites) }] : []),
+    ...lib.playlists.map((p, i) => ({ key: `pl${i}`, name: p.name, songs: ids(p.songs) })),
+    ...[...albums.entries()].sort(([a], [b]) => collator.compare(a, b)).map(([k, songs], i) => ({ key: `al${i}`, name: songs[0].album, sub: songs[0].albumArtist, songs, album: true })),
+  ];
+  const row = (g) => `<label class="copy-row"><input type="checkbox" data-key="${g.key}" /><span class="copy-name">${esc(g.name)}${g.sub ? `<span class="hint"> · ${esc(g.sub)}</span>` : ""}</span>` +
+    `<span class="hint">${countOf(g.songs.length, "song")} · ${fmtSize(g.songs.reduce((n, t) => n + t.size, 0))}</span></label>`;
+  const lists = copy.groups.filter((g) => !g.album), albumRows = copy.groups.filter((g) => g.album);
+  $("copy-list").innerHTML = (lists.length ? `<h2 class="page-section">Favourites and playlists</h2>${lists.map(row).join("")}` : "") +
+    `<h2 class="page-section">Albums</h2>${albumRows.map(row).join("")}`;
+  renderCopyTotal();
+}
+function chosenSongs() {
+  const seen = new Map();
+  for (const g of copy.groups || []) if (copy.picks.has(g.key)) for (const t of g.songs) seen.set(t.id, t);
+  return [...seen.values()];
+}
+function renderCopyTotal() {
+  const songs = chosenSongs();
+  $("copy-note").textContent = songs.length
+    ? `${countOf(songs.length, "song")} · ${fmtSize(songs.reduce((n, t) => n + t.size, 0))}. Songs already on this phone are skipped.`
+    : `Pick what to copy from ${state.settings.computer.name}.`;
+  $("copy-go").disabled = !songs.length && !$("copy-lists").checked;
+}
+$("copy-list").addEventListener("change", (e) => {
+  const key = e.target.dataset.key;
+  if (!key) return;
+  e.target.checked ? copy.picks.set(key, true) : copy.picks.delete(key);
+  renderCopyTotal();
+});
+$("copy-lists").addEventListener("change", renderCopyTotal);
+$("copy-go").addEventListener("click", async () => {
+  const songs = chosenSongs();
+  copy.busy = true;
+  $("copy-go").disabled = true;
+  $("copy-cancel").hidden = false;
+  $("copy-progress").hidden = false;
+  let summary = "";
+  try {
+    if (songs.length) {
+      const r = await invoke("computer_copy", { songs });
+      summary = `Copied ${countOf(r.copied, "song")}` + (r.skipped ? `, ${r.skipped} already here` : "") + (r.failed ? `, ${r.failed} failed` : "");
+      await refreshAutoFolders();
+      await rescan(false);
+    }
+    if ($("copy-lists").checked) {
+      const r = await invoke("computer_lists");
+      state.settings = r.settings;
+      state.favorites = new Set(r.settings.favorites || []);
+      state.playlists = r.settings.playlists || [];
+      plSets.clear();
+      applySearch();
+      summary += `${summary ? ". " : ""}Brought ${countOf(r.imported.favorites, "favourite")} and ${countOf(r.imported.playlists, "playlist")}`;
+    }
+    $("copy-note").textContent = summary + ".";
+  } catch (e) {
+    $("copy-note").textContent = String(e) === "Cancelled" ? "Stopped." : String(e);
+  } finally {
+    copy.busy = false;
+    $("copy-cancel").hidden = true;
+    $("copy-progress").hidden = true;
+    $("copy-go").disabled = false;
+  }
+});
+$("copy-cancel").addEventListener("click", () => invoke("computer_cancel"));
+listen("copy-progress", ({ payload: p }) => {
+  $("copy-progress").firstElementChild.style.width = `${(p.bytes / Math.max(1, p.total)) * 100}%`;
+  $("copy-note").textContent = `Copying song ${p.song + 1} of ${p.songs} · ${fmtSize(p.bytes)} of ${fmtSize(p.total)}`;
+});
+
+// Phone: the remote
+let remoteTimer = null, remoteCover = { id: null, url: "" }, remoteSeeking = false;
+function showRemote(open) {
+  $("remote").hidden = !open;
+  document.body.classList.toggle("show-page", open);
+  clearInterval(remoteTimer);
+  if (open) {
+    $("remote-from").textContent = state.settings.computer.name;
+    pollRemote();
+    remoteTimer = setInterval(pollRemote, 1000);
+  }
+}
+$("pc-remote").addEventListener("click", () => {
+  closeSettings();
+  showRemote(true);
+});
+$("remote-btn").addEventListener("click", () => showRemote($("remote").hidden));
+$("remote-close").addEventListener("click", () => showRemote(false));
+async function pollRemote() {
+  let now;
+  try {
+    now = await invoke("computer_now");
+  } catch (e) {
+    $("remote-title").textContent = "Can't reach the computer";
+    $("remote-artist").textContent = String(e);
+    return;
+  }
+  $("remote-title").textContent = now.title || "Nothing playing";
+  $("remote-artist").textContent = [now.artist, now.album].filter(Boolean).join(" — ");
+  $("remote-play-icon").setAttribute("href", now.playing ? "#i-pause" : "#i-play");
+  if (!remoteSeeking) {
+    $("remote-seek").max = Math.round(now.duration || 0);
+    $("remote-seek").value = Math.round(now.position || 0);
+    setRangeFill($("remote-seek"));
+  }
+  $("remote-pos").textContent = fmtTime(now.position);
+  $("remote-dur").textContent = fmtTime(now.duration);
+  if (document.activeElement !== $("remote-volume")) {
+    $("remote-volume").value = now.volume ?? 0.7;
+    setRangeFill($("remote-volume"));
+  }
+  // the cover: SoundCloud artwork as it is, a library song's from the computer
+  const key = now.cover || now.id || "";
+  if (key !== remoteCover.id) {
+    remoteCover = { id: key, url: now.cover || "" };
+    if (!now.cover && now.id) remoteCover.url = await invoke("computer_cover", { id: now.id }).catch(() => "");
+    $("remote-cover").innerHTML = coverHtml(remoteCover.url, now.album || now.title || "");
+    $("remote-bg").innerHTML = remoteCover.url ? `<img src="${esc(remoteCover.url)}" alt="">` : "";
+  }
+}
+$("remote").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-remote]");
+  if (!b) return;
+  await invoke("computer_remote", { command: b.dataset.remote, value: null }).catch((err) => setStatus(String(err), 4000));
+  setTimeout(pollRemote, 200);
+});
+$("remote-seek").addEventListener("input", () => {
+  remoteSeeking = true;
+  setRangeFill($("remote-seek"));
+});
+$("remote-seek").addEventListener("change", async () => {
+  await invoke("computer_remote", { command: "seek", value: Number($("remote-seek").value) }).catch(() => {});
+  remoteSeeking = false;
+});
+$("remote-volume").addEventListener("change", () => invoke("computer_remote", { command: "volume", value: Number($("remote-volume").value) }).catch(() => {}));
 
 // ------------------------------------------------------ artist & album pages
 

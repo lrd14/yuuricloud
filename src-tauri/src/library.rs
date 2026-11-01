@@ -82,6 +82,8 @@ pub struct Settings {
     pub pending_favorites: Vec<crate::backup::SongRef>,
     /// The user's own playlists of library songs.
     pub playlists: Vec<Playlist>,
+    /// The computer this phone is paired with (see computer.rs).
+    pub computer: crate::computer::ComputerLink,
     pub downloads: crate::downloads::DownloadConfig,
     pub soulseek: crate::slsk::SlskConfig,
 }
@@ -100,6 +102,7 @@ impl Default for Settings {
             favorites: Vec::new(),
             pending_favorites: Vec::new(),
             playlists: Vec::new(),
+            computer: Default::default(),
             downloads: Default::default(),
             soulseek: Default::default(),
         }

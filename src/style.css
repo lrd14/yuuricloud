@@ -775,6 +775,29 @@ body.show-page #library, body.show-page #empty, body.show-page #sc-empty, body.s
   body.ios .page-song .a { display: none; }
 }
 
+/* Phone: copying music from the computer, and the remote */
+.copy-page { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
+.copy-title { margin: 4px 0 6px; font-size: 26px; font-weight: 700; }
+.copy-list { flex: 1; min-height: 0; overflow-y: auto; margin: 6px -8px 0; padding: 0 8px; }
+.copy-row { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.copy-row input { accent-color: var(--accent-strong); width: 18px; height: 18px; flex: none; }
+.copy-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.copy-row > .hint { margin: 0; white-space: nowrap; }
+.copy-foot { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.copy-foot .actions { justify-content: flex-end; }
+.remote-page { grid-template-columns: minmax(0, 1fr); place-items: center; }
+.remote-page .np-main { width: min(100%, 420px); gap: 14px; }
+.remote-page .np-cover { width: min(100%, 300px, 38vh); }
+.remote-page #remote-seek { width: 100%; }
+.remote-times { display: flex; justify-content: space-between; width: 100%; color: var(--muted); font-size: 12px; margin-top: -8px; font-variant-numeric: tabular-nums; }
+.remote-page .buttons { gap: 26px; }
+.remote-volume { display: flex; align-items: center; gap: 10px; width: 100%; color: var(--muted); }
+.remote-volume .range { flex: 1; }
+body.show-page #np { display: none !important; }
+body.ios .remote-page .np-main { flex-direction: column; align-items: center; }
+body.ios .remote-page .np-info { text-align: center; }
+.int-nav { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+
 /* Now playing: big cover and lyrics, in place of the library */
 body.show-np #library, body.show-np #empty, body.show-np #sc-empty, body.show-np #slsk-empty, body.show-np #downloads { display: none !important; }
 .now .cover.small { cursor: pointer; }
@@ -959,9 +982,13 @@ body.ios .settings { height: min(720px, calc(100vh - 48px - env(safe-area-inset-
   body.ios .np-close { top: 8px; right: 8px; }
 }
 
-/* the smaller iPhones: the logo makes room for the three sources and the buttons */
+/* the smaller iPhones, and phones showing the remote button: the logo makes room for the three
+   sources and the buttons */
 @media (max-width: 380px) {
   body.ios .brand { display: none; }
+}
+@media (max-width: 599px) {
+  body.ios.paired .brand { display: none; }
 }
 
 

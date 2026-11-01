@@ -337,6 +337,24 @@ aren't on the new device yet become favourites once you add them. Tick **Include
 Last.fm, Soulseek and Discord logins along (keep that file private). On an iPhone, the backup is saved in, and
 imported from, yuuricloud's folder in the Files app.
 
+### Copy music to your phone over Wi-Fi, and use it as a remote
+
+With the computer and the iPhone on the same Wi-Fi:
+
+1. On the computer: Settings → Integrations → **Phone & computer** → turn on **Let your phone connect**. A QR code
+   appears. (If your computer asks, allow yuuricloud on private networks.)
+2. On the iPhone: point the camera at the code and tap **Open in yuuricloud**, or copy the code on the computer
+   and paste it under Settings → Integrations → Phone & computer → **Pair**. iOS asks to let yuuricloud find
+   devices on your network: allow it.
+3. **Copy music…** lists the computer's favourites, playlists and albums. Tick what you want and tap **Copy**: the
+   songs go into a `From computer` folder in yuuricloud's folder, and the favourites and playlists come along.
+   Songs already on the phone are skipped, so copying again only brings what's new.
+4. **Remote** (also the computer-and-phone button in the title bar) shows what the computer is playing and lets
+   you play, pause, skip, jump and change its volume from the phone.
+
+Pairing uses a code made fresh each time sharing is turned on; nothing works without it, and sharing stays off
+until you turn it on.
+
 ## Troubleshooting
 
 - **Windows says "Windows protected your PC".** Click **More info → Run anyway**. The app isn't signed with a paid

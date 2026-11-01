@@ -32,6 +32,7 @@
           <svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg>
         </button>
       </div>
+      <button id="remote-btn" class="icon-btn" title="Remote for your computer" hidden><svg viewBox="0 0 24 24"><use href="#i-devices" /></svg></button>
       <button id="downloads-btn" class="icon-btn dl-btn" title="Downloads">
         <svg viewBox="0 0 24 24"><use href="#i-download" /></svg>
         <span id="dl-badge" class="dl-badge" hidden></span>
@@ -134,6 +135,40 @@
         </div>
       </div>
       <div id="np-lyrics" class="np-lyrics"></div>
+    </section>
+
+    <section id="copy" class="lib-page copy-page" hidden>
+      <button id="copy-close" class="icon-btn page-close" title="Close"><svg viewBox="0 0 24 24"><use href="#i-close" /></svg></button>
+      <div class="page-kind">From your computer</div>
+      <h1 class="copy-title">Copy music</h1>
+      <p id="copy-note" class="hint"></p>
+      <div id="copy-list" class="copy-list"></div>
+      <footer class="copy-foot">
+        <label class="editor-check"><input id="copy-lists" type="checkbox" checked /> <span>Also bring the favourites and playlists</span></label>
+        <div id="copy-progress" class="dl-bar" hidden><i></i></div>
+        <div class="actions"><button id="copy-cancel" class="btn" hidden>Stop</button><button id="copy-go" class="btn accent">Copy</button></div>
+      </footer>
+    </section>
+
+    <section id="remote" class="np-page remote-page" hidden>
+      <div id="remote-bg" class="np-bg"></div>
+      <button id="remote-close" class="icon-btn np-close" title="Close"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg></button>
+      <div class="np-main">
+        <div class="page-kind" id="remote-from"></div>
+        <div id="remote-cover" class="np-cover"></div>
+        <div class="np-info">
+          <div id="remote-title" class="np-title"></div>
+          <div id="remote-artist" class="np-artist"></div>
+        </div>
+        <input id="remote-seek" class="range" type="range" min="0" max="0" step="1" value="0" />
+        <div class="remote-times"><span id="remote-pos">0:00</span><span id="remote-dur">0:00</span></div>
+        <div class="buttons">
+          <button class="icon-btn" data-remote="prev"><svg viewBox="0 0 24 24"><use href="#i-prev" /></svg></button>
+          <button class="play-btn" data-remote="toggle"><svg viewBox="0 0 24 24"><use id="remote-play-icon" href="#i-play" /></svg></button>
+          <button class="icon-btn" data-remote="next"><svg viewBox="0 0 24 24"><use href="#i-next" /></svg></button>
+        </div>
+        <div class="remote-volume"><svg viewBox="0 0 24 24"><use href="#i-volume" /></svg><input id="remote-volume" class="range" type="range" min="0" max="1" step="0.02" value="0.7" /></div>
+      </div>
     </section>
 
     <section id="page" class="lib-page" hidden>
@@ -546,6 +581,10 @@
                 <svg viewBox="0 0 24 24"><use href="#i-search" /></svg>
                 <span><span class="name">Soulseek</span><span class="state"></span></span>
               </button>
+              <button data-int="pc" data-status="pc-status">
+                <svg viewBox="0 0 24 24"><use href="#i-devices" /></svg>
+                <span><span class="name">Phone &amp; computer</span><span class="state"></span></span>
+              </button>
               <button data-int="lfm" data-status="lfm-status">
                 <svg viewBox="0 0 24 24"><use href="#i-bars" /></svg>
                 <span><span class="name">Last.fm</span><span class="state"></span></span>
@@ -778,6 +817,67 @@
               </p>
             </section>
 
+            <!-- Phone & computer -->
+            <section class="int-panel" data-int="pc" hidden>
+              <div class="desktop-only">
+                <p class="hint">
+                  Copy music from this computer to yuuricloud on your iPhone over Wi-Fi, and use the phone as a remote
+                  for what's playing here. Both need to be on the same Wi-Fi.
+                </p>
+                <h4 class="group-title">Sharing</h4>
+                <div class="group">
+                  <div class="row">
+                    <div>
+                      <div class="label">Let your phone connect</div>
+                      <div id="pc-status" class="hint">Off</div>
+                    </div>
+                    <label class="switch"><input id="share-on" type="checkbox" /><span></span></label>
+                  </div>
+                  <div id="share-code" class="phone-code" hidden>
+                    <img id="share-qr" alt="QR code that pairs the phone" />
+                    <div>
+                      <p class="hint">
+                        Point the iPhone's camera at the code and tap <b>Open in yuuricloud</b>. Or copy the code and paste
+                        it in yuuricloud on the phone, under Settings → Integrations → Phone &amp; computer.
+                      </p>
+                      <p class="hint">
+                        If the phone can't connect, allow yuuricloud on private networks when your computer asks, or in
+                        its firewall settings. A new code is made each time you turn this on.
+                      </p>
+                      <div class="actions"><button id="share-copy" class="btn">Copy code</button></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="ios-only">
+                <p class="hint">
+                  Copy music from yuuricloud on your computer over Wi-Fi, and use this phone as a remote for it. Both
+                  need to be on the same Wi-Fi.
+                </p>
+                <h4 class="group-title">Computer</h4>
+                <div class="group">
+                  <div class="row">
+                    <div><div class="label">Paired computer</div><div id="pc-status-phone" class="hint">Not paired</div></div>
+                    <div class="actions"><button id="pc-unlink" class="btn danger" hidden>Unpair</button></div>
+                  </div>
+                  <div id="pc-pair">
+                    <p class="hint phone-steps">
+                      On your computer, open yuuricloud → Settings → Integrations → Phone &amp; computer and turn on
+                      <b>Let your phone connect</b>. Then point this iPhone's camera at the code it shows, or paste the code here.
+                    </p>
+                    <div class="fields">
+                      <label>Pairing code<input id="pc-code" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="yuuricloud://pair?…" /></label>
+                      <button id="pc-link" class="btn">Pair</button>
+                    </div>
+                  </div>
+                  <div id="pc-actions" class="row" hidden>
+                    <div><div class="label">Music and remote</div><div class="hint">Copy songs, favourites and playlists, or control what's playing there.</div></div>
+                    <div class="actions"><button id="pc-copy" class="btn">Copy music…</button><button id="pc-remote" class="btn">Remote</button></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
             <!-- Last.fm -->
             <section class="int-panel" data-int="lfm" hidden>
               <p class="hint">
@@ -951,6 +1051,7 @@
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M5 20h14v-2H5zM19 9h-4V3H9v6H5l7 7z" /></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></symbol>
     <symbol id="i-to-top" viewBox="0 0 24 24"><path d="M5 4h14v2H5zm7 4-6 6h4v6h4v-6h4z" /></symbol>
+    <symbol id="i-devices" viewBox="0 0 24 24"><path d="M4 6h18V4H4a2 2 0 0 0-2 2v11H0v3h14v-3H4zm19 2h-6a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1zm-1 9h-4v-7h4z" /></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></symbol>
     <symbol id="i-lyrics" viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2zm3 4v2h10V8zm0 4v2h7v-2z" /></symbol>
     <symbol id="i-random" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2.5 3a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm9 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM12 10.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM7.5 15a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm9 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" /></symbol>
