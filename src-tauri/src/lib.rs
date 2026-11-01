@@ -6,6 +6,7 @@ mod computer;
 mod cover_color;
 mod downloads;
 mod editor;
+mod history;
 mod integrations;
 mod library;
 mod lyrics;
@@ -423,6 +424,34 @@ fn record_play(state: State<AppState>, path: String) -> PlayStat {
     let stat = stat.clone();
     library::save_json(&state.data_dir.join("stats.json"), &*stats);
     stat
+}
+
+/// Add a song to the listening history (once it has stopped playing).
+#[tauri::command]
+fn log_listen(state: State<AppState>, listen: history::Listen) -> Result<(), String> {
+    history::append(&state.data_dir, &listen)
+}
+
+/// The whole listening history, for the stats page.
+#[tauri::command]
+async fn get_history(app: AppHandle) -> Vec<history::Listen> {
+    let dir = app.state::<AppState>().data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || history::read(&dir)).await.unwrap_or_default()
+}
+
+/// Delete a library song's file (to the recycle bin / trash on computers) and drop it from the library.
+#[tauri::command]
+fn delete_song(state: State<AppState>, path: String) -> Result<(), String> {
+    let mut tracks = state.tracks.lock().unwrap();
+    if !tracks.iter().any(|t| t.path == path) {
+        return Err("Not a library song".into());
+    }
+    #[cfg(desktop)]
+    trash::delete(&path).map_err(|e| format!("Couldn't move it to the bin: {e}"))?;
+    #[cfg(mobile)]
+    std::fs::remove_file(&path).map_err(|e| format!("Couldn't delete it: {e}"))?;
+    tracks.retain(|t| t.path != path);
+    Ok(())
 }
 
 /// How much to turn a song down so songs sound equally loud (dB, 0 or less). Only songs in the
@@ -1666,6 +1695,9 @@ pub fn run() {
             get_stats,
             about,
             record_play,
+            log_listen,
+            get_history,
+            delete_song,
             loudness,
             lyrics,
             reveal_file,

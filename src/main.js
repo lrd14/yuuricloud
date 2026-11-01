@@ -388,6 +388,8 @@ function renderArtists() {
     group("Smart lists") +
     SMART.map((x) => [x, smartList(SMART_PREFIX + x.id).length]).filter(([x, count]) => count || x.id === "added")
       .map(([x, count]) => item(SMART_PREFIX + x.id, x.name, count)).join("") +
+    `<li class="new-playlist" data-open-page="stats" style="--i:${n++}">Listening stats</li>` +
+    `<li class="new-playlist" data-open-page="dupes" style="--i:${n++}">Find duplicates</li>` +
     group("Playlists") + lists + `<li class="new-playlist" data-new-playlist style="--i:${n++}">＋ New playlist</li>` +
     group("Artists") +
     keys.map((k) => item(k, artists.get(k).name, artists.get(k).albums.size)).join("");
@@ -1315,6 +1317,7 @@ el.artistList.addEventListener("click", (e) => {
     return;
   }
   if (li.dataset.newPlaylist !== undefined) return newPlaylist();
+  if (li.dataset.openPage) return openPage(li.dataset.openPage);
   state.artist = li.dataset.key || null;
   state.album = null;
   for (const x of el.artistList.children) x.classList.toggle("sel", x === li);
@@ -1510,6 +1513,7 @@ $("win-close").addEventListener("click", () => {
     return;
   }
   saveSession();
+  logListen();
   invoke("discord_update", { track: null, playing: false, position: 0 }).finally(() => appWindow.close());
 });
 
@@ -1635,7 +1639,18 @@ function lastfmEnabled() {
   return lf && lf.scrobble && lf.sessionKey;
 }
 
+/** Put the song that was playing into the listening history (Stats), if it played a while. */
+function logListen() {
+  const t = scrob.track;
+  if (!t || scrob.listened < 10 || scrob.logged) return;
+  scrob.logged = true;
+  const listen = { at: scrob.startedAt, secs: Math.round(scrob.listened), path: t.path, title: t.title, artist: t.artist, album: t.album || "", sc: !!t.sc };
+  invoke("log_listen", { listen }).then(() => stats.history?.push(listen), () => {});
+}
+
 function beginScrobble(t) {
+  logListen();
+  scrob.logged = false;
   Object.assign(scrob, { track: t, startedAt: Math.floor(Date.now() / 1000), listened: 0, lastTime: audio.currentTime, done: false });
   if (t && lastfmEnabled()) invoke("lastfm_now_playing", { track: trackInfo(t) }).catch(() => {});
 }
@@ -3025,6 +3040,8 @@ function renderPage() {
   $("page-close").title = pageStack.length > 1 ? "Back (Esc)" : "Close (Esc)";
   $("page-back-icon").setAttribute("href", pageStack.length > 1 ? "#i-back" : "#i-close");
   if (top.kind === "artist") renderArtistPage(top.key);
+  else if (top.kind === "stats") renderStatsPage();
+  else if (top.kind === "dupes") renderDupesPage();
   else renderAlbumPage(top.key);
   $("page").scrollTop = 0;
 }
@@ -3088,6 +3105,251 @@ function renderAlbumPage(key) {
   loadAbout(t0.albumArtist, t0.album);
 }
 let pageAll = [];
+
+// ------------------------------------------------------------- listening stats
+// Made from the listening history (history.jsonl, see logListen): time listened, top artists,
+// songs and albums for a week, month, year or everything.
+
+const stats = { history: null, range: "month" };
+const STAT_RANGES = { week: "This week", month: "This month", year: "This year", all: "All time" };
+const DAY = 86400;
+
+function openStats() {
+  openPage("stats");
+}
+
+function rangeStart(range) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  if (range === "week") d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // since Monday
+  else if (range === "month") d.setDate(1);
+  else if (range === "year") d.setMonth(0, 1);
+  else return 0;
+  return d.getTime() / 1000;
+}
+
+/** "3 h 20 min", "45 min" */
+function fmtListened(secs) {
+  const m = Math.round(secs / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return h >= 100 ? `${h.toLocaleString()} h` : `${h} h${m % 60 ? ` ${m % 60} min` : ""}`;
+}
+
+/** Listened seconds per day / month / year, as bars [{label, title, secs}]. */
+function statBars(list, range) {
+  const from = rangeStart(range);
+  const bars = [];
+  const key = (d) => (range === "year" || range === "allMonths" ? `${d.getFullYear()}-${d.getMonth()}` : range === "allYears" ? `${d.getFullYear()}` : d.toDateString());
+  if (range === "all") {
+    const first = list.length ? new Date(list[0].at * 1000) : new Date();
+    const months = (new Date().getFullYear() - first.getFullYear()) * 12 + new Date().getMonth() - first.getMonth();
+    return statBars(list, months > 24 ? "allYears" : "allMonths");
+  }
+  const now = new Date();
+  if (range === "week" || range === "month") {
+    const end = range === "week" ? 7 : new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    for (let i = 0; i < end; i++) {
+      const d = new Date(from * 1000);
+      d.setDate(d.getDate() + i);
+      bars.push({ key: key(d), label: range === "week" ? d.toLocaleDateString(undefined, { weekday: "short" }) : String(d.getDate()),
+        title: d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }), secs: 0, future: d > now });
+    }
+  } else if (range === "year" || range === "allMonths") {
+    const start = range === "year" ? new Date(now.getFullYear(), 0, 1) : new Date(list[0]?.at * 1000 || now);
+    const d = new Date(start.getFullYear(), start.getMonth(), 1);
+    const last = range === "year" ? new Date(now.getFullYear(), 11, 1) : new Date(now.getFullYear(), now.getMonth(), 1);
+    for (; d <= last; d.setMonth(d.getMonth() + 1)) {
+      bars.push({ key: key(d), label: d.toLocaleDateString(undefined, { month: "short" }),
+        title: d.toLocaleDateString(undefined, { month: "long", year: "numeric" }), secs: 0, future: d > now });
+    }
+  } else {
+    for (let y = new Date(list[0].at * 1000).getFullYear(); y <= now.getFullYear(); y++) bars.push({ key: String(y), label: String(y), title: String(y), secs: 0 });
+  }
+  const byKey = new Map(bars.map((b) => [b.key, b]));
+  for (const l of list) {
+    const b = byKey.get(key(new Date(l.at * 1000)));
+    if (b) b.secs += l.secs;
+  }
+  return bars;
+}
+
+/** Top entries of a list of listens grouped by `keyOf`, by time listened. */
+function topBy(list, keyOf, n = 10) {
+  const groups = new Map();
+  for (const l of list) {
+    const k = keyOf(l);
+    if (!k) continue;
+    if (!groups.has(k)) groups.set(k, { first: l, secs: 0, plays: 0 });
+    const g = groups.get(k);
+    g.secs += l.secs;
+    g.plays++;
+  }
+  return [...groups.values()].sort((a, b) => b.secs - a.secs).slice(0, n);
+}
+
+/** Most days in a row with some listening, ending at the last day listened. */
+function longestStreak(list) {
+  const days = [...new Set(list.map((l) => Math.floor((l.at - new Date(l.at * 1000).getTimezoneOffset() * 60) / DAY)))].sort((a, b) => a - b);
+  let best = 0, run = 0;
+  days.forEach((d, i) => {
+    run = i && d === days[i - 1] + 1 ? run + 1 : 1;
+    best = Math.max(best, run);
+  });
+  return best;
+}
+
+async function renderStatsPage() {
+  const body = $("page-body");
+  body.dataset.all = "stats";
+  if (!stats.history) {
+    body.innerHTML = `<h1 class="page-h1">Listening stats</h1><p class="hint">Loading…</p>`;
+    stats.history = (await invoke("get_history").catch(() => [])) || [];
+    if (pageStack[pageStack.length - 1]?.kind !== "stats") return;
+  }
+  const from = rangeStart(stats.range);
+  const list = stats.history.filter((l) => l.at >= from).sort((a, b) => a.at - b.at);
+  const total = list.reduce((s, l) => s + l.secs, 0);
+  const libraryByPath = new Map(state.tracks.map((t) => [t.path, t]));
+  const artistsInLibrary = new Set(state.tracks.map(artistKey));
+  const lc = (x) => (x || "").toLowerCase();
+  const artists = topBy(list, (l) => lc(l.artist));
+  const songs = topBy(list, (l) => l.path);
+  const albums = topBy(list.filter((l) => l.album), (l) => lc(l.artist) + "\0" + lc(l.album), 6);
+  const bars = statBars(list, stats.range);
+  const maxBar = Math.max(1, ...bars.map((b) => b.secs));
+  const busiest = topBy(list, (l) => new Date(l.at * 1000).toDateString(), 1)[0];
+  const hours = topBy(list, (l) => String(new Date(l.at * 1000).getHours()), 1)[0];
+  const tile = (value, label) => `<div class="stat-tile"><div class="stat-value">${esc(value)}</div><div class="stat-label">${esc(label)}</div></div>`;
+
+  pageSongs = songs.map((g) => libraryByPath.get(g.first.path)).filter(Boolean);
+  pageAll = pageSongs;
+  pageAlbums = albums.map((g) => libraryByPath.get(g.first.path)).map((t) => t && albumKey(t));
+  body.innerHTML =
+    `<header class="stats-head"><h1 class="page-h1">Listening stats</h1>` +
+    `<div class="segmented stat-range">${Object.entries(STAT_RANGES).map(([k, v]) => `<button data-range="${k}" class="${k === stats.range ? "on" : ""}">${v}</button>`).join("")}</div></header>` +
+    (list.length
+      ? `<div class="stat-tiles">${tile(fmtListened(total), "listened")}${tile(list.length.toLocaleString(), list.length === 1 ? "song played" : "songs played")}` +
+        `${tile(new Set(list.map((l) => lc(l.artist))).size.toLocaleString(), "artists")}` +
+        (stats.range === "week" ? "" : tile(countOf(longestStreak(list), "day"), "longest streak")) +
+        (busiest && stats.range !== "week" ? tile(new Date(busiest.first.at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }), `busiest day · ${fmtListened(busiest.secs)}`) : "") +
+        (hours ? tile(new Date(2000, 0, 1, Number(new Date(hours.first.at * 1000).getHours())).toLocaleTimeString(undefined, { hour: "numeric" }), "favourite hour") : "") +
+        `</div>` +
+        `<div class="stat-chart" role="img" aria-label="Time listened per ${bars.length > 12 ? "day" : "period"}">${bars.map((b) =>
+          `<div class="stat-bar${b.future ? " future" : ""}" data-tip="${esc(`${b.title}: ${b.secs ? fmtListened(b.secs) : "nothing"}`)}">` +
+          `<i style="height:${b.secs ? Math.max(3, (b.secs / maxBar) * 100) : 0}%"></i><span>${esc(bars.length > 16 && (Number(b.label) - 1) % 5 ? "" : b.label)}</span></div>`).join("")}` +
+        `<div id="stat-tip" class="stat-tip" hidden></div></div>` +
+        `<div class="stat-cols"><section><h2 class="page-section">Top artists</h2><ol class="stat-list">${artists.map((g) =>
+          `<li><span class="stat-name">${artistsInLibrary.has(lc(g.first.artist)) ? `<a href="#" data-artist="${esc(lc(g.first.artist))}">${esc(g.first.artist)}</a>` : esc(g.first.artist || "Unknown")}</span>` +
+          `<span class="stat-meter"><i style="width:${(g.secs / artists[0].secs) * 100}%"></i></span><span class="stat-num">${fmtListened(g.secs)}</span></li>`).join("")}</ol></section>` +
+        `<section><h2 class="page-section">Top songs</h2><ol class="stat-list">${songs.map((g) => {
+          const i = pageSongs.indexOf(libraryByPath.get(g.first.path));
+          return `<li${i >= 0 ? ` class="page-song-link" data-song="${i}"` : ""}><span class="stat-name">${esc(g.first.title)}<small>${esc(g.first.artist)}</small></span>` +
+            `<span class="stat-num">${countOf(g.plays, "play")}</span></li>`;
+        }).join("")}</ol></section></div>` +
+        (albums.length ? `<h2 class="page-section">Top albums</h2><div class="grid page-albums">${albums.map((g, i) => {
+          const t = libraryByPath.get(g.first.path);
+          return `<div class="album"${pageAlbums[i] ? ` data-album="${i}"` : ""} style="--i:${i}">${coverHtml(t && thumbOf(t), g.first.album)}<div class="name">${esc(g.first.album)}</div><div class="sub">${esc(g.first.artist)} · ${fmtListened(g.secs)}</div></div>`;
+        }).join("")}</div>` : "")
+      : `<p class="stat-empty">${stats.history.length ? `Nothing played ${STAT_RANGES[stats.range].toLowerCase()} yet.` : "Nothing here yet — songs show up once you've listened to them for a bit."}</p>`);
+}
+
+$("page-body").addEventListener("click", (e) => {
+  const r = e.target.closest("[data-range]");
+  if (r) {
+    stats.range = r.dataset.range;
+    renderStatsPage();
+  }
+  const song = e.target.closest("[data-song]");
+  if (song) playTracks(pageSongs, Number(song.dataset.song));
+});
+// the bar chart's tooltip
+$("page-body").addEventListener("pointermove", (e) => {
+  const tip = $("stat-tip");
+  if (!tip) return;
+  const bar = e.target.closest(".stat-bar");
+  for (const b of document.querySelectorAll(".stat-bar.hover")) b !== bar && b.classList.remove("hover");
+  if (!bar) return (tip.hidden = true);
+  bar.classList.add("hover");
+  tip.textContent = bar.dataset.tip;
+  tip.hidden = false;
+  const box = tip.parentElement.getBoundingClientRect(), r = bar.getBoundingClientRect();
+  tip.style.left = `${Math.min(box.width - tip.offsetWidth, Math.max(0, r.left - box.left + r.width / 2 - tip.offsetWidth / 2))}px`;
+});
+$("page-body").addEventListener("pointerleave", () => $("stat-tip") && ($("stat-tip").hidden = true));
+
+// ---------------------------------------------------------------- duplicates
+// The same song more than once in the library: same artist and title (ignoring case, "feat."
+// and bracketed bits like "(Remastered)") and nearly the same length.
+
+const dupes = { groups: [] };
+function songIdentity(t) {
+  const clean = (x) => (x || "").toLowerCase().replace(/[([].*?[)\]]/g, "").replace(/\s(feat|ft)\.?\s.*$/, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return clean(t.artist) + "\0" + clean(t.title);
+}
+function findDuplicates() {
+  const by = new Map();
+  for (const t of state.tracks) {
+    const k = songIdentity(t);
+    if (!k.split("\0")[1]) continue;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(t);
+  }
+  const groups = [];
+  for (const list of by.values()) {
+    if (list.length < 2) continue;
+    // split songs of clearly different lengths (a live or extended version is a different song)
+    list.sort((a, b) => (a.duration || 0) - (b.duration || 0));
+    let cur = [list[0]];
+    for (const t of list.slice(1)) {
+      if (Math.abs((t.duration || 0) - (cur[cur.length - 1].duration || 0)) <= 3) cur.push(t);
+      else (cur.length > 1 && groups.push(cur), (cur = [t]));
+    }
+    if (cur.length > 1) groups.push(cur);
+  }
+  return groups.sort((a, b) => cmpName(a[0].artist, b[0].artist) || cmpName(a[0].title, b[0].title));
+}
+const extOf = (p) => (p.match(/\.([a-z0-9]+)$/i)?.[1] || "").toUpperCase();
+
+function renderDupesPage() {
+  const body = $("page-body");
+  body.dataset.all = "dupes";
+  dupes.groups = findDuplicates();
+  pageSongs = dupes.groups.flat();
+  pageAll = pageSongs;
+  pageAlbums = [];
+  const extra = dupes.groups.reduce((s, g) => s + g.length - 1, 0);
+  let i = 0;
+  body.innerHTML = `<h1 class="page-h1">Duplicates</h1>` +
+    (dupes.groups.length
+      ? `<p class="hint">${countOf(dupes.groups.length, "song")} ${dupes.groups.length === 1 ? "is" : "are"} in the library more than once (${countOf(extra, "extra copy").replace("copys", "copies")}). ` +
+        `${phone ? "Deleting removes the file." : "Deleting moves the file to the bin."}</p>` +
+        dupes.groups.map((g) => `<div class="dupe-group"><div class="dupe-title">${esc(g[0].title)} <span class="hint">${esc(g[0].artist)}</span></div>` +
+          g.map((t) => `<div class="dupe-row" data-i="${i++}"><button class="icon-btn" data-dupe="play" title="Play"><svg viewBox="0 0 24 24"><use href="#i-play" /></svg></button>` +
+            `<div class="dupe-file"><div>${esc(t.album || "No album")} <span class="tag">${esc(extOf(t.path))}</span> <span class="hint">${fmtTime(t.duration)}</span></div>` +
+            `<div class="hint path" title="${esc(t.path)}">${esc(t.path)}</div></div>` +
+            (phone ? "" : `<button class="btn" data-dupe="reveal">Show</button>`) +
+            `<button class="btn danger" data-dupe="delete">Delete</button></div>`).join("") + `</div>`).join("")
+      : `<p class="stat-empty">No duplicates — every song is in the library once.</p>`);
+}
+
+$("page-body").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-dupe]");
+  if (!b) return;
+  const t = pageSongs[Number(b.closest(".dupe-row").dataset.i)];
+  if (b.dataset.dupe === "play") return playTracks([t], 0);
+  if (b.dataset.dupe === "reveal") return invoke("reveal_file", { path: t.path }).catch((err) => setStatus(String(err), 4000));
+  if (!(await ask({ title: `Delete "${t.title}" (${extOf(t.path)}, ${t.album || "no album"})?`, text: t.path, ok: "Delete", danger: true }))) return;
+  try {
+    await invoke("delete_song", { path: t.path });
+    state.tracks = state.tracks.filter((x) => x !== t);
+    applySearch();
+    renderDupesPage();
+    setStatus(`Deleted ${t.title}`, 3000);
+  } catch (err) {
+    setStatus(String(err), 5000);
+  }
+});
 
 /** Fill in what Last.fm knows: the text, tags and similar artists. */
 async function loadAbout(artist, album) {
