@@ -3287,6 +3287,7 @@ function renderPcSettings() {
     $("pc-unlink").hidden = !pc.address;
     $("pc-pair").hidden = !!pc.address;
     $("pc-actions").hidden = !pc.address;
+    $("pc-favs-row").hidden = !pc.address;
     $("remote-btn").hidden = !pc.address;
     document.body.classList.toggle("paired", !!pc.address);
     return;
@@ -3512,6 +3513,27 @@ function showRemote(open) {
     remoteTimer = setInterval(pollRemote, 1000);
   }
 }
+$("pc-favs").addEventListener("click", async () => {
+  const b = $("pc-favs"), status = $("pc-favs-status"), name = state.settings.computer?.name || "the computer";
+  b.disabled = true;
+  status.className = "hint";
+  status.textContent = `Comparing with ${name}…`;
+  try {
+    const r = await invoke("computer_sync_favorites");
+    state.favorites = new Set(r.favorites);
+    state.settings.favorites = r.favorites;
+    applySearch();
+    renderNowFav();
+    status.className = "hint ok";
+    status.textContent = !r.shared ? `This phone and ${name} have no songs in common yet.`
+      : !r.favoritedHere && !r.favoritedThere ? `Already in sync: ${countOf(r.shared, "song")} on both.`
+      : [r.favoritedHere && `${countOf(r.favoritedHere, "favourite")} from ${name} marked here`, r.favoritedThere && `${countOf(r.favoritedThere, "favourite")} from this phone marked on ${name}`].filter(Boolean).join(" · ") + ".";
+  } catch (e) {
+    status.className = "hint err";
+    status.textContent = String(e);
+  }
+  b.disabled = false;
+});
 $("pc-remote").addEventListener("click", () => {
   closeSettings();
   showRemote(true);

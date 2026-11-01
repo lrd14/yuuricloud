@@ -431,6 +431,11 @@ With the computer and the iPhone on the same Wi-Fi:
 Pairing uses a code made fresh each time sharing is turned on; nothing works without it, and sharing stays off
 until you turn it on.
 
+**Sync favourites:** on the phone, Settings → Integrations → Phone & computer → **Sync favourites** makes your
+favourites the same on both, for every song the phone and the computer both have (matched by title, artist and
+length, wherever the files are). Nothing is copied and no favourite is taken away: a song that's a favourite on
+either one becomes a favourite on both.
+
 ## Troubleshooting
 
 - **Windows says "Windows protected your PC".** Click **More info → Run anyway**. The app isn't signed with a paid

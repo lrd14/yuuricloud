@@ -1509,6 +1509,54 @@ async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>, favorit
     .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FavSync {
+    /// songs both have
+    shared: usize,
+    favorited_here: usize,
+    favorited_there: usize,
+    favorites: Vec<String>,
+}
+
+/// Phone: match up favourites with the computer, both ways, for every song both have (found by
+/// title, artist and length, wherever it is), without copying anything.
+#[tauri::command]
+async fn computer_sync_favorites(app: AppHandle) -> Result<FavSync, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let link = computer_of(&state);
+        let library = computer::get_json(&link, "/library")?;
+        let songs: Vec<computer::SongToCopy> = serde_json::from_value(library["songs"].clone()).map_err(|e| e.to_string())?;
+        let theirs: std::collections::HashSet<String> =
+            library["favorites"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
+        let here = state.tracks.lock().unwrap().clone();
+        let ours: std::collections::HashSet<String> = state.settings.lock().unwrap().favorites.iter().cloned().collect();
+        let (mut shared, mut fav_here, mut fav_there) = (0, Vec::new(), Vec::new());
+        for song in &songs {
+            let Some(t) = computer::already_here(song, &here) else { continue };
+            shared += 1;
+            match (theirs.contains(&song.id), ours.contains(&t.path)) {
+                (true, false) if !fav_here.contains(&t.path) => fav_here.push(t.path.clone()),
+                (false, true) => fav_there.push(song.id.clone()),
+                _ => {}
+            }
+        }
+        let favorited_here = fav_here.len();
+        let favorites = {
+            let mut s = state.settings.lock().unwrap();
+            s.favorites.extend(fav_here);
+            if favorited_here > 0 {
+                state.save_settings(&s);
+            }
+            s.favorites.clone()
+        };
+        let favorited_there = fav_there.iter().filter(|id| computer::favorite_there(&link, id).is_ok()).count();
+        Ok(FavSync { shared, favorited_here, favorited_there, favorites })
+    })
+    .await
+}
+
 #[tauri::command]
 fn computer_cancel(state: State<AppState>) {
     state.copy_cancel.store(true, Ordering::Relaxed);
@@ -2192,6 +2240,7 @@ pub fn run() {
             delete_song,
             song_quality,
             remove_duplicates,
+            computer_sync_favorites,
             save_many_tags,
             can_self_update,
             install_update,
