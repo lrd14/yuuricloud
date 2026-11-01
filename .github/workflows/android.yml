@@ -44,17 +44,16 @@ jobs:
       # no Rust cache: plugin build scripts (the yuuricloud:// links) must run for the fresh project
       - run: npm ci
 
+      # the runner comes with the Android SDK and NDK
+      - run: echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
       - name: Create the Android project
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: npm run tauri android init -- --ci
 
       - name: App icon
         run: npm run tauri icon -- icon.png
 
       - name: Build
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: npm run tauri android build -- --ci --apk --target aarch64 --target armv7
 
       - name: Sign
