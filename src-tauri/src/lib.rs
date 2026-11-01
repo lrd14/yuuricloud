@@ -371,6 +371,32 @@ fn set_playlists(state: State<AppState>, playlists: Vec<library::Playlist>) -> V
     s.playlists.clone()
 }
 
+/// What Last.fm says about an artist (or an album, with `album`), for the artist and album pages.
+/// Cached for a week.
+#[tauri::command]
+async fn about(app: AppHandle, artist: String, album: Option<String>) -> Result<integrations::About, String> {
+    let state = app.state::<AppState>();
+    let cfg = state.settings.lock().unwrap().lastfm.clone();
+    let key = format!("{}\0{}", artist.to_lowercase(), album.as_deref().unwrap_or("").to_lowercase());
+    let file = state.data_dir.join("about").join(format!("{}.json", library::hash_hex(&key)));
+    blocking(move || {
+        let fresh = std::fs::metadata(&file).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default().as_secs() < 7 * 86_400);
+        if fresh {
+            if let Some(cached) = library::load_json(&file) {
+                return Ok(cached);
+            }
+        }
+        let info = match &album {
+            Some(album) => integrations::lastfm_album_info(&cfg, &artist, album)?,
+            None => integrations::lastfm_artist_info(&cfg, &artist)?,
+        };
+        let _ = std::fs::create_dir_all(file.parent().unwrap());
+        library::save_json(&file, &info);
+        Ok(info)
+    })
+    .await
+}
+
 /// Play counts and last plays for the smart lists.
 #[tauri::command]
 fn get_stats(state: State<AppState>) -> HashMap<String, PlayStat> {
@@ -1422,6 +1448,7 @@ pub fn run() {
             set_favorite,
             set_playlists,
             get_stats,
+            about,
             record_play,
             loudness,
             lyrics,

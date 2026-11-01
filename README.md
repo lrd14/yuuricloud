@@ -303,6 +303,11 @@ to **Move up**, **Move down** or remove it, and right-click the playlist itself 
 view of the song with its lyrics. Timed lyrics follow along as it plays, and clicking a line jumps there. Lyrics
 come from [LRCLIB](https://lrclib.net), a free lyrics database; songs it doesn't know show "No lyrics found".
 
+**Artist and album pages:** right-click (hold) an artist → **Artist page**, or an album → **Album page**, or click
+the artist or album in the now-playing view. An artist page shows their albums, most played songs, a short bio,
+tags and similar artists (the ones in your library link to their pages); an album page shows its songs and what
+Last.fm says about it.
+
 **Smart lists** sit above your playlists and fill themselves: **Recently added**, **Most played**, **Recently
 played**, **Never played** and **Forgotten favourites** (favourites you haven't played in two months). A song
 counts as played at the same point it would scrobble.

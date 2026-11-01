@@ -598,7 +598,12 @@ function playShown(index) {
     slskDownload(pick.group ? pick.all : [pick]); // not on this computer yet: double-click downloads
     return;
   }
-  state.queue = [...state.shown];
+  playTracks(state.shown, index);
+}
+
+/** Play `tracks` from song `index`, in the current shuffle mode. */
+function playTracks(tracks, index) {
+  state.queue = [...tracks];
   state.order = state.queue.map((_, i) => i);
   if (state.shuffle === SHUFFLE_RANDOM) {
     state.order = [index];
@@ -2502,6 +2507,7 @@ el.albumGrid.addEventListener("contextmenu", (e) => {
       playShown(0);
     } },
     { label: "Play next", icon: "i-queue", action: () => [...tracks].reverse().forEach((t) => playNext(t)) },
+    { label: "Album page", icon: "i-grid", action: () => openPage("album", state.albumKeys[card.dataset.i]) },
     "-",
     ...playlistMenu(tracks),
   ]);
@@ -2523,7 +2529,154 @@ el.artistList.addEventListener("contextmenu", (e) => {
   const p = playlistOf(key);
   openMenu(e.clientX, e.clientY, li.title, p
     ? [play, "-", { label: "Rename…", icon: "i-edit", action: () => renamePlaylist(p) }, { label: "Delete playlist…", icon: "i-stop", action: () => deletePlaylist(p) }]
-    : [play, "-", ...playlistMenu(songs())]);
+    : [play, ...(specialList(key) ? [] : [{ label: "Artist page", icon: "i-note", action: () => openPage("artist", key) }]), "-", ...playlistMenu(songs())]);
+});
+
+// ------------------------------------------------------ artist & album pages
+
+const pageStack = []; // [{ kind: "artist" | "album", key }], the last one shown
+const pageOpen = () => !$("page").hidden;
+function showPage(open) {
+  $("page").hidden = !open;
+  document.body.classList.toggle("show-page", open);
+  if (!open) pageStack.length = 0;
+}
+function openPage(kind, key) {
+  if (npOpen()) showNowPlaying(false);
+  showDownloads(false);
+  closeSettings();
+  if (state.source !== "local") setSource("local");
+  pageStack.push({ kind, key });
+  showPage(true);
+  renderPage();
+}
+function pageBack() {
+  pageStack.pop();
+  if (pageStack.length) renderPage();
+  else showPage(false);
+}
+$("page-close").addEventListener("click", pageBack);
+document.addEventListener("keydown", (e) => e.key === "Escape" && pageOpen() && $("settings").hidden && $("ask").hidden && pageBack());
+$("source").addEventListener("click", () => showPage(false), true);
+
+const totalTime = (ts) => fmtTime(ts.reduce((s, t) => s + (t.duration || 0), 0));
+const countOf = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function pageSongRow(t, i, number) {
+  const playing = current()?.path === t.path;
+  return `<div class="page-song${playing ? " playing" : ""}" data-i="${i}"><span class="n">${playing && prefs.equalizer ? EQ_HTML : number}</span>` +
+    `<span class="t">${esc(t.title)}${isFav(t) ? '<svg class="heart" style="display:inline-block"><use href="#i-heart" /></svg>' : ""}</span>` +
+    `<span class="a">${esc(t.artist)}</span><span class="d">${fmtTime(t.duration)}</span></div>`;
+}
+
+function renderPage() {
+  const top = pageStack[pageStack.length - 1];
+  if (!top) return;
+  $("page-close").title = pageStack.length > 1 ? "Back (Esc)" : "Close (Esc)";
+  $("page-back-icon").setAttribute("href", pageStack.length > 1 ? "#i-back" : "#i-close");
+  if (top.kind === "artist") renderArtistPage(top.key);
+  else renderAlbumPage(top.key);
+  $("page").scrollTop = 0;
+}
+
+let pageSongs = []; // the songs listed on the page, for clicks
+let pageAlbums = []; // the album keys in the page's grid
+
+function renderArtistPage(key) {
+  const tracks = state.tracks.filter((t) => artistKey(t) === key).sort(cmpTracks);
+  if (!tracks.length) return pageBack();
+  const name = tracks[0].albumArtist;
+  const groups = new Map();
+  for (const t of tracks) {
+    const k = albumKey(t);
+    if (!groups.has(k)) groups.set(k, { album: t.album, year: t.year, cover: thumbOf(t), count: 0 });
+    const g = groups.get(k);
+    g.count++;
+    g.cover ||= thumbOf(t);
+    g.year ||= t.year;
+  }
+  pageAlbums = [...groups.keys()].sort((a, b) => cmpYear(groups.get(b).year, groups.get(a).year)); // newest first
+  const played = tracks.filter(plays);
+  const top = (played.length ? [...played].sort((a, b) => plays(b) - plays(a)) : tracks).slice(0, 5);
+  pageSongs = top;
+  const playsTotal = tracks.reduce((s, t) => s + plays(t), 0);
+  const hero = groups.get(pageAlbums[0])?.cover;
+  $("page-body").innerHTML =
+    `<header class="page-head">${coverHtml(hero, name).replace('class="cover"', 'class="cover page-art round"')}` +
+    `<div class="page-title"><div class="page-kind">Artist</div><h1>${esc(name)}</h1>` +
+    `<div class="hint">${[countOf(groups.size, "album"), countOf(tracks.length, "song"), totalTime(tracks), playsTotal && countOf(playsTotal, "play")].filter(Boolean).join(" · ")}</div>` +
+    `<div class="page-actions"><button class="btn accent" data-act="play">Play</button><button class="btn" data-act="shuffle">Shuffle</button></div>` +
+    `<div id="page-tags" class="page-tags"></div></div></header>` +
+    `<p id="page-about" class="page-about"></p>` +
+    `<h2 class="page-section">${played.length ? "Most played" : "Songs"}</h2><div class="page-songs">${top.map((t, i) => pageSongRow(t, i, i + 1)).join("")}</div>` +
+    `<h2 class="page-section">Albums</h2><div class="grid page-albums">${pageAlbums.map((k, i) => {
+      const g = groups.get(k);
+      return `<div class="album" data-album="${i}" style="--i:${i}">${coverHtml(g.cover, g.album)}<div class="name">${esc(g.album)}</div><div class="sub">${esc(g.year || countOf(g.count, "song"))}</div></div>`;
+    }).join("")}</div>` +
+    `<div id="page-similar"></div>`;
+  $("page-body").dataset.all = "artist";
+  pageAll = tracks;
+  loadAbout(name, null);
+}
+
+function renderAlbumPage(key) {
+  const tracks = state.tracks.filter((t) => albumKey(t) === key).sort(cmpTracks);
+  if (!tracks.length) return pageBack();
+  const t0 = tracks[0];
+  const multiDisc = new Set(tracks.map((t) => t.discNo)).size > 1;
+  pageSongs = tracks;
+  pageAll = tracks;
+  pageAlbums = [];
+  $("page-body").innerHTML =
+    `<header class="page-head">${coverHtml(tracks.find((t) => t.cover)?.cover, t0.album).replace('class="cover"', 'class="cover page-art"')}` +
+    `<div class="page-title"><div class="page-kind">Album</div><h1>${esc(t0.album)}</h1>` +
+    `<div class="hint"><a href="#" class="page-artist" data-artist="${esc(artistKey(t0))}">${esc(t0.albumArtist)}</a>${t0.year ? " · " + esc(t0.year) : ""} · ${countOf(tracks.length, "song")} · ${totalTime(tracks)}</div>` +
+    `<div class="page-actions"><button class="btn accent" data-act="play">Play</button><button class="btn" data-act="shuffle">Shuffle</button><button class="btn" data-act="add">Add to playlist…</button></div>` +
+    `<div id="page-tags" class="page-tags"></div></div></header>` +
+    `<p id="page-about" class="page-about"></p>` +
+    `<div class="page-songs">${tracks.map((t, i) => pageSongRow(t, i, multiDisc ? `${t.discNo}-${t.trackNo}` : t.trackNo || i + 1)).join("")}</div>`;
+  loadAbout(t0.albumArtist, t0.album);
+}
+let pageAll = [];
+
+/** Fill in what Last.fm knows: the text, tags and similar artists. */
+async function loadAbout(artist, album) {
+  const top = pageStack[pageStack.length - 1];
+  let info;
+  try {
+    info = await invoke("about", { artist, album });
+  } catch {
+    return;
+  }
+  if (pageStack[pageStack.length - 1] !== top) return; // moved on meanwhile
+  $("page-about").textContent = info.summary;
+  $("page-tags").innerHTML = info.tags.slice(0, 5).map((t) => `<span class="tag">${esc(t)}</span>`).join("");
+  if (!album && info.similar.length) {
+    const inLibrary = new Map(state.tracks.map((t) => [artistKey(t), t.albumArtist]));
+    $("page-similar").innerHTML = `<h2 class="page-section">Similar artists</h2><div class="page-tags similar">` +
+      info.similar.map((n) => inLibrary.has(n.toLowerCase())
+        ? `<a href="#" class="tag link" data-artist="${esc(n.toLowerCase())}">${esc(n)}</a>`
+        : `<span class="tag" title="Not in your library">${esc(n)}</span>`).join("") + `</div>`;
+  }
+}
+
+$("page-body").addEventListener("click", (e) => {
+  const artist = e.target.closest("[data-artist]");
+  if (artist) {
+    e.preventDefault();
+    return openPage("artist", artist.dataset.artist);
+  }
+  const album = e.target.closest("[data-album]");
+  if (album) return openPage("album", pageAlbums[album.dataset.album]);
+  const song = e.target.closest(".page-song");
+  if (song) return playTracks(pageSongs, Number(song.dataset.i));
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "play") playTracks(pageAll, 0);
+  if (act === "shuffle") playTracks(shuffled([...pageAll]), 0);
+  if (act === "add") {
+    const r = e.target.getBoundingClientRect();
+    openMenu(r.left, r.bottom + 4, "Add to playlist", playlistMenu(pageAll));
+  }
 });
 
 // ----------------------------------------------------- now playing & lyrics
@@ -2536,10 +2689,13 @@ function showNowPlaying(open) {
   $("np-btn").classList.toggle("on", open);
   if (open) {
     showDownloads(false);
+    showPage(false);
     renderNowPlaying();
   }
 }
 $("np-btn").addEventListener("click", () => showNowPlaying(!npOpen()));
+$("np-artist").addEventListener("click", () => current() && !current().sc && openPage("artist", artistKey(current())));
+$("np-album").addEventListener("click", () => current() && !current().sc && current().album && openPage("album", albumKey(current())));
 $("np-close").addEventListener("click", () => showNowPlaying(false));
 // the cover in the player opens it too (the cover element is replaced for every song)
 document.querySelector(".now").addEventListener("click", (e) => e.target.closest(".cover") && showNowPlaying(!npOpen()));
@@ -2558,6 +2714,9 @@ function renderNowPlaying() {
   $("np-title").textContent = t.title;
   $("np-artist").textContent = t.artist;
   $("np-album").textContent = [t.album, t.year].filter(Boolean).join(" · ");
+  // library songs: the artist and album lead to their pages
+  $("np-artist").classList.toggle("link", !t.sc);
+  $("np-album").classList.toggle("link", !t.sc && !!t.album);
   if (lyr.path !== t.path) loadLyrics(t);
 }
 
@@ -2985,6 +3144,7 @@ const viaLabel = (it) => (it.via === "yt-dlp" || (!it.via && !it.t.downloadable)
 function showDownloads(open = true) {
   closeSettings();
   if (open && npOpen()) showNowPlaying(false);
+  if (open && pageOpen()) showPage(false);
   document.body.classList.toggle("show-downloads", open);
   $("downloads").hidden = !open;
   if (open) {
