@@ -81,7 +81,7 @@ const DEFAULT_PREFS = {
   appIcon: "yuuri", scView: "list", onboarded: false, checkUpdates: true, skipVersion: "",
   ignoreThe: true, scanOnStart: true,
   crossfade: 0, normalize: false, eq: false, eqPreset: "flat", eqCustom: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-  singleClick: false, fade: true, rememberModes: false, shuffle: SHUFFLE_OFF, repeat: REPEAT_OFF, resume: true,
+  keys: {}, singleClick: false, fade: true, rememberModes: false, shuffle: SHUFFLE_OFF, repeat: REPEAT_OFF, resume: true,
 };
 const COVER_SIZES = { small: "120px", medium: "156px", large: "200px" };
 let prefs = { ...DEFAULT_PREFS };
@@ -818,20 +818,66 @@ function setRepeat(mode) {
   if (prefs.rememberModes && prefs.repeat !== state.repeat) setPref("repeat", state.repeat);
 }
 
-/** OS media keys / lock-screen controls where the webview supports them. */
+/** OS media keys and the system's now-playing controls (Windows' media overlay, macOS Now
+ * Playing, Linux MPRIS, the phone lock screen) where the webview supports them. */
+const mediaSession = "mediaSession" in navigator ? navigator.mediaSession : null;
+let artFor = null;
 function updateMediaSession(t) {
-  if (!("mediaSession" in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: t.title, artist: t.artist, album: t.album,
-    artwork: t.cover ? [{ src: mediaSrc(t.cover) }] : [],
+  if (!mediaSession) return;
+  const meta = { title: t.title, artist: t.artist, album: t.album };
+  mediaSession.metadata = new MediaMetadata({ ...meta, artwork: [] });
+  // the system fetches the artwork itself and can't always read app files, so hand it a picture
+  const pic = t.thumb || t.cover;
+  artFor = t;
+  if (pic) {
+    coverDataUrl(pic).then((src) => {
+      if (artFor === t && src) mediaSession.metadata = new MediaMetadata({ ...meta, artwork: [{ src, sizes: "256x256", type: "image/jpeg" }] });
+    });
+  }
+}
+/** A cover as a 256 px JPEG data: URL (null if it can't be loaded). */
+function coverDataUrl(pic) {
+  return new Promise((done) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const c = Object.assign(document.createElement("canvas"), { width: 256, height: 256 });
+        c.getContext("2d").drawImage(img, 0, 0, 256, 256);
+        done(c.toDataURL("image/jpeg", 0.85));
+      } catch {
+        done(mediaSrc(pic));
+      }
+    };
+    img.onerror = () => done(null);
+    img.src = mediaSrc(pic);
   });
 }
-if ("mediaSession" in navigator) {
-  const ms = navigator.mediaSession;
-  ms.setActionHandler("play", startPlayback);
-  ms.setActionHandler("pause", pausePlayback);
-  ms.setActionHandler("previoustrack", prev);
-  ms.setActionHandler("nexttrack", () => next());
+function syncMediaPosition() {
+  if (!mediaSession?.setPositionState || !isFinite(audio.duration) || !audio.duration) return;
+  try {
+    mediaSession.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: audio.playbackRate || 1 });
+  } catch {}
+}
+if (mediaSession) {
+  const handlers = {
+    play: startPlayback,
+    pause: pausePlayback,
+    stop: pausePlayback,
+    previoustrack: prev,
+    nexttrack: () => next(),
+    seekbackward: (d) => seekBy(-(d.seekOffset || 10)),
+    seekforward: (d) => seekBy(d.seekOffset || 10),
+    seekto: (d) => {
+      if (isFinite(d.seekTime)) audio.currentTime = d.seekTime;
+      syncMediaPosition();
+    },
+  };
+  for (const [name, fn] of Object.entries(handlers)) {
+    try {
+      mediaSession.setActionHandler(name, fn);
+    } catch {} // not every webview knows every action
+  }
 }
 
 // ------------------------------------------------- gapless, crossfade, volume
@@ -1011,18 +1057,23 @@ onAudio("play", () => {
 // ------------------------------------------------------------------ events
 
 onAudio("play", () => {
+  if (mediaSession) mediaSession.playbackState = "playing";
+  syncMediaPosition();
   el.playIcon.setAttribute("href", "#i-pause");
   document.body.classList.remove("paused");
   if (scrob.track !== current()) beginScrobble(current());
   discordSync();
 });
 onAudio("pause", () => {
+  if (mediaSession) mediaSession.playbackState = "paused";
+  syncMediaPosition();
   el.playIcon.setAttribute("href", "#i-play");
   document.body.classList.add("paused");
   discordSync();
   saveSession();
 });
 onAudio("seeked", () => {
+  syncMediaPosition();
   scrob.lastTime = audio.currentTime;
   discordSync();
 });
@@ -1035,6 +1086,7 @@ function showDuration() {
   el.dur.textContent = fmtTime(audio.duration);
 }
 onAudio("loadedmetadata", showDuration);
+onAudio("loadedmetadata", syncMediaPosition);
 let seeking = false;
 onAudio("timeupdate", () => {
   trackListening();
@@ -1335,41 +1387,115 @@ el.preferTags.addEventListener("change", async () => {
   rescan(true);
 });
 
+// Keyboard shortcuts. The ones in SHORTCUTS can be changed in Settings → Shortcuts (saved as
+// prefs.keys, only the changed ones); Escape, the arrow keys up and down, and Enter can't.
+const SHORTCUTS = [
+  { id: "playPause", label: "Play / pause", keys: "Space", run: togglePlay },
+  { id: "next", label: "Next song", keys: "Ctrl+ArrowRight", run: () => next() },
+  { id: "prev", label: "Previous song", keys: "Ctrl+ArrowLeft", run: () => prev() },
+  { id: "seekFwd", label: "Forward 5 seconds", keys: "ArrowRight", run: () => seekBy(5) },
+  { id: "seekBack", label: "Back 5 seconds", keys: "ArrowLeft", run: () => seekBy(-5) },
+  { id: "volUp", label: "Volume up", keys: "Ctrl+ArrowUp", run: () => nudgeVolume(0.05) },
+  { id: "volDown", label: "Volume down", keys: "Ctrl+ArrowDown", run: () => nudgeVolume(-0.05) },
+  { id: "mute", label: "Mute", keys: "M", run: () => setMuted(!audio.muted) },
+  { id: "like", label: "Favourite the playing song", keys: "L", run: () => $("now-fav").click() },
+  { id: "shuffle", label: "Shuffle", keys: "S", run: cycleShuffle },
+  { id: "repeat", label: "Repeat", keys: "R", run: cycleRepeat },
+  { id: "nowPlaying", label: "Now playing", keys: "N", run: () => current() && showNowPlaying(!npOpen()) },
+  { id: "queue", label: "Queue", keys: "Q", run: () => showQueue(!queueOpen()) },
+  { id: "mini", label: "Mini player", keys: "Ctrl+M", run: () => toggleMini(), desktop: true },
+  { id: "jump", label: "Go to the playing song", keys: "Ctrl+L", run: () => jumpToCurrent(), anywhere: true },
+  { id: "search", label: "Search", keys: "Ctrl+F", run: () => (el.search.focus(), el.search.select()), anywhere: true },
+  { id: "settings", label: "Settings", keys: "Ctrl+,", run: () => (el.settings.hidden ? openSettings() : closeSettings()), anywhere: true },
+  { id: "stats", label: "Listening stats", keys: "Ctrl+I", run: () => openStats(), anywhere: true },
+  { id: "rescan", label: "Rescan the library", keys: "F5", run: () => rescan(false), anywhere: true },
+];
+const MODIFIERS = ["Control", "Meta", "Alt", "Shift", "AltGraph", "CapsLock"];
+
+/** "Ctrl+Shift+K" for a key press (Ctrl means ⌘ on a Mac), or "" for a lone modifier key. */
+function keyCombo(e) {
+  if (MODIFIERS.includes(e.key)) return "";
+  const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  return [e.ctrlKey || e.metaKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.shiftKey && key.length > 1 ? "Shift" : "", key].filter(Boolean).join("+");
+}
+const shortcutKeys = (s) => (prefs.keys && s.id in prefs.keys ? prefs.keys[s.id] : s.keys);
+/** How a key combination is written on this computer. */
+function showCombo(combo) {
+  if (!combo) return "—";
+  const names = { ArrowRight: "→", ArrowLeft: "←", ArrowUp: "↑", ArrowDown: "↓", Ctrl: platform === "mac" ? "⌘" : "Ctrl", Alt: platform === "mac" ? "⌥" : "Alt", Shift: "Shift" };
+  return combo.split("+").map((k) => names[k] || k).join(platform === "mac" ? "" : "+");
+}
+function seekBy(secs) {
+  if (!current() || !isFinite(audio.duration)) return;
+  audio.currentTime = Math.max(0, Math.min(audio.duration - 0.1, audio.currentTime + secs));
+}
+function nudgeVolume(by) {
+  el.volume.value = Math.max(0, Math.min(1, baseVolume + by));
+  el.volume.dispatchEvent(new Event("input"));
+}
+
+let capturing = null; // the Settings → Shortcuts button waiting for a key
 document.addEventListener("keydown", (e) => {
-  const typing = e.target === el.search;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+  if (capturing) return captureKey(e);
+  const typing = e.target === el.search || e.target.matches?.("input:not([type=range]):not([type=checkbox]), textarea, select");
+  const combo = keyCombo(e);
+  const action = combo && SHORTCUTS.find((s) => shortcutKeys(s) === combo && (!s.desktop || !phone));
+  // shortcuts that work while typing need a modifier key, so typing a letter never triggers one
+  if (action && (action.anywhere || !typing) && (!typing || /^(Ctrl|Alt)\+|^F\d/.test(combo))) {
+    if (!action.anywhere && (!el.settings.hidden || !$("editor").hidden || !$("ask").hidden)) return;
     e.preventDefault();
-    el.search.focus();
-    el.search.select();
-  } else if (e.key === "F5") {
-    e.preventDefault();
-    rescan(false);
-  } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
-    e.preventDefault();
-    el.settings.hidden ? openSettings() : closeSettings();
-  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "l") {
-    e.preventDefault();
-    jumpToCurrent();
+    action.run();
   } else if (e.key === "Escape") {
     if (!$("editor").hidden) return closeEditor();
     closeSettings();
-    if (typing) el.search.blur();
+    if (typing) e.target.blur();
   } else if (typing || !el.settings.hidden || !$("editor").hidden) {
     return;
-  } else if (e.key === " ") {
-    e.preventDefault();
-    togglePlay();
-  } else if ((e.ctrlKey || e.metaKey) && e.key === "ArrowRight") {
-    next();
-  } else if ((e.ctrlKey || e.metaKey) && e.key === "ArrowLeft") {
-    prev();
-  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+  } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     const n = state.shown.length;
     if (n) selectRow(Math.min(n - 1, Math.max(0, state.selected + (e.key === "ArrowDown" ? 1 : -1))));
   } else if (e.key === "Enter" && state.selected >= 0) {
     playShown(state.selected);
   }
+});
+
+/** Settings → Shortcuts: one row per shortcut, click the key to change it. */
+function renderShortcuts() {
+  $("shortcut-list").innerHTML = SHORTCUTS.filter((s) => !s.desktop || !phone).map((s) =>
+    `<div class="row"><div class="label">${esc(s.label)}</div>` +
+    `<button class="btn key-btn${capturing === s.id ? " capturing" : ""}${shortcutKeys(s) !== s.keys ? " changed" : ""}" data-key="${s.id}">` +
+    `${capturing === s.id ? "Press keys…" : esc(showCombo(shortcutKeys(s)))}</button></div>`).join("");
+}
+function captureKey(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const id = capturing;
+  if (e.key === "Escape") {
+    capturing = null;
+    return renderShortcuts();
+  }
+  const combo = e.key === "Backspace" || e.key === "Delete" ? "" : keyCombo(e);
+  if (combo === "" && MODIFIERS.includes(e.key)) return; // wait for the rest of the combination
+  capturing = null;
+  const keys = { ...(prefs.keys || {}) };
+  // one key does one thing: take it away from whatever had it
+  for (const s of SHORTCUTS) if (combo && s.id !== id && shortcutKeys(s) === combo) keys[s.id] = "";
+  keys[id] = combo;
+  for (const s of SHORTCUTS) if (keys[s.id] === s.keys) delete keys[s.id];
+  setPref("keys", keys);
+  renderShortcuts();
+}
+$("shortcut-list").addEventListener("click", (e) => {
+  const b = e.target.closest(".key-btn");
+  if (!b) return;
+  capturing = capturing === b.dataset.key ? null : b.dataset.key;
+  renderShortcuts();
+});
+$("shortcuts-reset").addEventListener("click", () => {
+  capturing = null;
+  setPref("keys", {});
+  renderShortcuts();
 });
 
 // ------------------------------------------------------------ window chrome
@@ -1397,6 +1523,47 @@ if (!phone) {
   appWindow.onResized(syncMaximized);
   syncMaximized();
 }
+
+// ------------------------------------------------------------- mini player
+// The window shrinks to just the player and stays on top; the same button (or Ctrl+M) makes it
+// big again, at the size it was.
+
+let mini = null; // while small: the size to go back to
+const FULL_MIN = { w: 900, h: 560 }; // keep in sync with minWidth/minHeight in tauri.conf.json
+async function toggleMini(on = !mini) {
+  if (phone || on === !!mini) return;
+  const { LogicalSize } = window.__TAURI__.dpi;
+  const w = appWindow;
+  try {
+    if (on) {
+      mini = { size: await w.innerSize(), max: await w.isMaximized() };
+      showNowPlaying(false);
+      showQueue(false);
+      closeSettings();
+      if (mini.max) await w.unmaximize();
+      document.body.classList.add("mini");
+      await w.setMinSize(new LogicalSize(320, 116));
+      await w.setSize(new LogicalSize(440, 136));
+      await w.setAlwaysOnTop(true);
+    } else {
+      const was = mini;
+      mini = null;
+      document.body.classList.remove("mini");
+      await w.setAlwaysOnTop(prefs.onTop);
+      await w.setSize(was.size);
+      await w.setMinSize(new LogicalSize(FULL_MIN.w, FULL_MIN.h));
+      if (was.max) await w.maximize();
+    }
+  } catch (e) {
+    console.warn("mini player:", e);
+  }
+  $("mini-icon").setAttribute("href", mini ? "#i-expand" : "#i-mini");
+  $("mini-btn").title = mini ? "Back to the full window" : "Mini player";
+  document.querySelector(".player").toggleAttribute("data-tauri-drag-region", !!mini);
+  document.querySelector(".now").toggleAttribute("data-tauri-drag-region", !!mini);
+  kickWave();
+}
+$("mini-btn").addEventListener("click", () => toggleMini());
 
 // ---------------------------------------------------------- resume session
 
@@ -1765,6 +1932,7 @@ $("eq-bands").addEventListener("input", (e) => {
 });
 
 function syncSettingsUI() {
+  renderShortcuts();
   for (const input of el.settings.querySelectorAll("input[data-pref]")) {
     const value = prefs[input.dataset.pref];
     if (input.type === "checkbox") {
@@ -1796,6 +1964,7 @@ function openSettings() {
 
 function closeSettings() {
   if (el.settings.hidden) return;
+  capturing = null;
   // closing during the setup guide counts as skipping the rest of it
   const hidden = () => {
     el.settings.hidden = true;

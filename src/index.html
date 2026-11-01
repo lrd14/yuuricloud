@@ -303,6 +303,7 @@
       <div class="volume">
         <button id="np-btn" class="icon-btn toggle" title="Now playing and lyrics"><svg viewBox="0 0 24 24"><use href="#i-lyrics" /></svg></button>
         <button id="queue-btn" class="icon-btn toggle" title="Queue"><svg viewBox="0 0 24 24"><use href="#i-queue" /></svg></button>
+        <button id="mini-btn" class="icon-btn desktop-only" title="Mini player"><svg viewBox="0 0 24 24"><use id="mini-icon" href="#i-mini" /></svg></button>
         <button id="mute" class="icon-btn" title="Mute"><svg viewBox="0 0 24 24"><use id="vol-icon" href="#i-volume" /></svg></button>
         <input id="volume" class="range" type="range" min="0" max="1" step="0.01" value="0.7" />
       </div>
@@ -351,6 +352,7 @@
           <button data-tab="library">Library</button>
           <button data-tab="playback">Playback</button>
           <button data-tab="sound" class="desktop-only">Sound</button>
+          <button data-tab="shortcuts" class="desktop-only">Shortcuts</button>
           <button data-tab="integrations">Integrations</button>
         </nav>
 
@@ -489,6 +491,14 @@
               <div><div class="label">Full rescan</div><div class="hint">Re-read every file instead of only changed ones.</div></div>
               <button id="full-rescan" class="btn">Rescan everything</button>
             </div>
+          </div>
+
+          <div class="tab" data-tab="shortcuts" hidden>
+            <div class="row">
+              <div><div class="label">Keyboard shortcuts</div><div class="hint">Click a key to change it, then press the new keys. Backspace removes it, Escape keeps it as it was.</div></div>
+              <button id="shortcuts-reset" class="btn">Reset all</button>
+            </div>
+            <div id="shortcut-list"></div>
           </div>
 
           <div class="tab" data-tab="sound" hidden>
@@ -1059,6 +1069,8 @@
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z" /></symbol>
     <symbol id="i-globe" viewBox="0 0 24 24"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3zm5 16H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2z" /></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M3.9 12A3.1 3.1 0 0 1 7 8.9h4V7H7a5 5 0 0 0 0 10h4v-1.9H7A3.1 3.1 0 0 1 3.9 12zM8 13h8v-2H8zm9-6h-4v1.9h4a3.1 3.1 0 0 1 0 6.2h-4V17h4a5 5 0 0 0 0-10z" /></symbol>
+    <symbol id="i-mini" viewBox="0 0 24 24"><path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z" /></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M21 11V3h-8l3.29 3.29-10 10L3 13v8h8l-3.29-3.29 10-10z" /></symbol>
     <symbol id="i-queue" viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 4h12v2H3zm0 4h8v2H3zm14 0v-4h2v4h4v2h-4v4h-2v-4h-4v-2z" /></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M5 20h14v-2H5zM19 9h-4V3H9v6H5l7 7z" /></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></symbol>

@@ -333,7 +333,7 @@ body.hide-counts .list li .count { display: none; }
 .settings-backdrop.closing { animation: fade-in var(--t-med) ease reverse forwards; }
 .settings-backdrop.closing .settings { animation: modal-in var(--t-med) var(--ease) reverse forwards; }
 .settings {
-  width: min(640px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px));
+  width: min(720px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px));
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--popover); border: 1px solid var(--line); border-radius: 14px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
@@ -343,9 +343,9 @@ body.hide-counts .list li .count { display: none; }
 .settings-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 8px 22px; }
 .settings-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
 .settings-head svg.x { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.4; }
-.settings-tabs { display: flex; gap: 4px; padding: 0 18px 10px; border-bottom: 1px solid var(--line); }
+.settings-tabs { display: flex; gap: 4px; padding: 0 18px 10px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); }
 .settings-tabs button {
-  background: none; border: none; padding: 6px 12px; border-radius: 8px; color: var(--muted);
+  background: none; border: none; padding: 6px 11px; white-space: nowrap; border-radius: 8px; color: var(--muted);
 }
 .settings-tabs button:hover { background: var(--hover); color: var(--text); }
 .settings-tabs button.on { background: var(--selected); color: var(--strong); }
@@ -1078,3 +1078,23 @@ body.phone.duo .titlebar {
 @media (orientation: landscape) {
   body.phone.duo .right .panel-head { padding-right: var(--corner); }
 }
+
+/* Settings → Shortcuts */
+.key-btn { min-width: 96px; font-variant-numeric: tabular-nums; font-family: ui-monospace, "Cascadia Mono", Menlo, monospace; font-size: 12.5px; }
+.key-btn.changed { border-color: color-mix(in srgb, var(--accent-base) 50%, transparent); }
+.key-btn.capturing { background: var(--selected); color: var(--strong); font-family: inherit; }
+
+/* Mini player: the window shrinks to just the player, on top of other windows. */
+body.mini .titlebar, body.mini #library, body.mini .status, body.mini .np, body.mini .queue-panel { display: none !important; }
+body.mini #app { grid-template-rows: 1fr; }
+body.mini .player {
+  height: auto; margin: 0; border: none; border-radius: 0; padding: 10px 14px 8px;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; gap: 4px; background: none;
+}
+body.mini .now { padding-right: 76px; }
+body.mini .now .cover.small { width: 44px; height: 44px; }
+body.mini .volume { position: absolute; top: 12px; right: 10px; gap: 0; }
+body.mini .volume > :not(#mini-btn) { display: none; }
+body.mini .buttons { gap: 6px; }
+body.mini .seek-row { max-width: none; }
+body.mini #locate { display: none; }
