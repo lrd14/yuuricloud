@@ -24,7 +24,6 @@
         <kbd>Ctrl F</kbd>
       </label>
       <button id="add-folder" class="btn">Add folder</button>
-      <button id="rescan" class="btn">Rescan</button>
       <button id="sc-refresh" class="btn" title="Reload your likes and playlists">Refresh</button>
       <div id="update-pill" class="update-pill" hidden>
         <button id="update-open" class="btn small accent" title="Open the download page for the new version">Update</button>
@@ -190,12 +189,19 @@
         <input id="remote-seek" class="range" type="range" min="0" max="0" step="1" value="0" />
         <div class="remote-times"><span id="remote-pos">0:00</span><span id="remote-dur">0:00</span></div>
         <div class="buttons">
+          <button id="remote-queue-btn" class="icon-btn toggle" title="Queue"><svg viewBox="0 0 24 24"><use href="#i-queue" /></svg></button>
           <button class="icon-btn" data-remote="prev"><svg viewBox="0 0 24 24"><use href="#i-prev" /></svg></button>
           <button class="play-btn" data-remote="toggle"><svg viewBox="0 0 24 24"><use id="remote-play-icon" href="#i-play" /></svg></button>
           <button class="icon-btn" data-remote="next"><svg viewBox="0 0 24 24"><use href="#i-next" /></svg></button>
+          <span class="remote-spacer"></span>
         </div>
         <div class="remote-volume"><svg viewBox="0 0 24 24"><use href="#i-volume" /></svg><input id="remote-volume" class="range" type="range" min="0" max="1" step="0.02" value="0.7" /></div>
         </div>
+      </div>
+      <div id="remote-queue" class="remote-queue" hidden>
+        <header class="queue-head"><div><h2>Queue</h2><div id="remote-queue-sub" class="hint"></div></div>
+          <button id="remote-queue-close" class="icon-btn" title="Close"><svg viewBox="0 0 12 12" class="x"><path d="M2 2l8 8M10 2l-8 8" /></svg></button></header>
+        <div id="remote-queue-list" class="remote-queue-list"></div>
       </div>
     </section>
 
@@ -543,8 +549,8 @@
               <label class="switch"><input type="checkbox" data-pref="scanOnStart" /><span></span></label>
             </div>
             <div class="row">
-              <div><div class="label">Full rescan</div><div class="hint">Re-read every file instead of only changed ones.</div></div>
-              <button id="full-rescan" class="btn">Rescan everything</button>
+              <div><div class="label">Rescan the library</div><div class="hint"><span class="desktop-only">New, changed and removed songs in your music folders show up by themselves, so this is rarely needed. </span>Look for changes now (F5), or re-read every file from scratch.</div></div>
+              <div class="actions"><button id="rescan" class="btn">Rescan now</button><button id="full-rescan" class="btn">Rescan everything</button></div>
             </div>
           </div>
 

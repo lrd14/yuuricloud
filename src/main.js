@@ -3317,13 +3317,29 @@ function reportNow() {
   invoke("remote_report", { now: t ? {
     path: t.path, title: t.title, artist: t.artist, album: t.album || "", cover: t.sc ? t.cover : "",
     playing: !audio.paused, position: audio.currentTime || 0, duration: audio.duration || t.duration || 0, volume: baseVolume,
+    queue: remoteQueue(),
   } : {} }).catch(() => {});
+}
+/** The queue for the phone's remote: a few songs that played, the one playing and what's next. */
+function remoteQueue() {
+  const from = Math.max(0, state.pos - 3), to = Math.min(state.order.length, state.pos + 41);
+  const items = [];
+  for (let i = from; i < to; i++) {
+    const t = state.queue[state.order[i]];
+    if (t) items.push({ at: i, title: t.title, artist: t.artist });
+  }
+  return { pos: state.pos, total: state.order.length, items };
 }
 listen("remote-command", ({ payload: { command, value } }) => {
   if (command === "toggle") togglePlay();
   if (command === "next") next();
   if (command === "prev") prev();
   if (command === "seek" && value != null && current()) audio.currentTime = value;
+  // a song in the queue, by its place in the playing order
+  if (command === "jump" && value != null && value >= 0 && value < state.order.length && value !== state.pos) {
+    state.pos = value;
+    playCurrent();
+  }
   if (command === "volume" && value != null) {
     baseVolume = Math.min(1, Math.max(0, value));
     el.volume.value = baseVolume;
@@ -3502,6 +3518,8 @@ $("pc-remote").addEventListener("click", () => {
 });
 $("remote-btn").addEventListener("click", () => showRemote($("remote").hidden));
 $("remote-close").addEventListener("click", () => showRemote(false));
+// the queue starts closed every time the remote opens
+new MutationObserver(() => $("remote").hidden && !$("remote-queue").hidden && showRemoteQueue(false)).observe($("remote"), { attributes: true, attributeFilter: ["hidden"] });
 async function pollRemote() {
   let now;
   try {
@@ -3521,6 +3539,8 @@ async function pollRemote() {
   }
   $("remote-pos").textContent = fmtTime(now.position);
   $("remote-dur").textContent = fmtTime(now.duration);
+  remoteNow = now;
+  renderRemoteQueue();
   if (document.activeElement !== $("remote-volume")) {
     $("remote-volume").value = now.volume ?? 0.7;
     setRangeFill($("remote-volume"));
@@ -3534,6 +3554,45 @@ async function pollRemote() {
     $("remote-bg").innerHTML = remoteCover.url ? `<img src="${esc(remoteCover.url)}" alt="">` : "";
   }
 }
+// the computer's queue, on the phone
+let remoteNow = null, remoteQueueShown = "";
+function renderRemoteQueue() {
+  if ($("remote-queue").hidden) return;
+  const q = remoteNow?.queue;
+  if (!q?.items?.length) {
+    $("remote-queue-sub").textContent = "";
+    $("remote-queue-list").innerHTML = `<p class="hint queue-empty">Nothing queued on the computer.</p>`;
+    remoteQueueShown = "";
+    return;
+  }
+  const ahead = q.total - q.pos - 1;
+  $("remote-queue-sub").textContent = ahead ? `${countOf(ahead, "song")} up next` : "Last song";
+  const key = JSON.stringify(q);
+  if (key === remoteQueueShown) return; // unchanged: leave the list (and where it's scrolled) alone
+  const first = remoteQueueShown === "";
+  remoteQueueShown = key;
+  $("remote-queue-list").innerHTML = q.items.map((it) =>
+    `<button class="queue-item${it.at === q.pos ? " now" : it.at < q.pos ? " past" : ""}" data-at="${it.at}">` +
+    `<span class="queue-text"><span class="name">${esc(it.title)}</span><span class="sub">${esc(it.artist)}</span></span>` +
+    (it.at === q.pos ? `<svg viewBox="0 0 24 24"><use href="#i-play" /></svg>` : "") + `</button>`).join("") +
+    (q.total > q.items[q.items.length - 1].at + 1 ? `<p class="hint queue-empty">and ${countOf(q.total - q.items[q.items.length - 1].at - 1, "more song")}</p>` : "");
+  if (first) $("remote-queue-list").querySelector(".now")?.scrollIntoView({ block: "center" });
+}
+function showRemoteQueue(open) {
+  $("remote-queue").hidden = !open;
+  $("remote-queue-btn").classList.toggle("on", open);
+  remoteQueueShown = "";
+  renderRemoteQueue();
+}
+$("remote-queue-btn").addEventListener("click", () => showRemoteQueue($("remote-queue").hidden));
+$("remote-queue-close").addEventListener("click", () => showRemoteQueue(false));
+$("remote-queue-list").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-at]");
+  if (!b || b.classList.contains("now")) return;
+  await invoke("computer_remote", { command: "jump", value: Number(b.dataset.at) }).catch((err) => setStatus(String(err), 4000));
+  setTimeout(pollRemote, 250);
+});
+
 $("remote").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-remote]");
   if (!b) return;
