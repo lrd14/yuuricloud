@@ -1257,3 +1257,6 @@ body.phone .np-tools { justify-content: flex-start; }
 .lyr-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .lyr-actions .spacer { flex: 1; }
 #lyr-stamp { font-variant-numeric: tabular-nums; }
+
+.dupe-row.keep { background: color-mix(in srgb, var(--accent-base) 10%, transparent); border-radius: 8px; }
+.dupe-file .tag.best { background: color-mix(in srgb, var(--accent-base) 40%, transparent); color: var(--strong); }

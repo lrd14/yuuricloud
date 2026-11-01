@@ -3867,6 +3867,13 @@ function findDuplicates() {
 }
 const extOf = (p) => (p.match(/\.([a-z0-9]+)$/i)?.[1] || "").toUpperCase();
 
+const dupeQuality = new Map(); // path -> { label, score, size }
+/** The copy of a group that would be kept: the best quality, then the biggest file. */
+function bestCopy(g) {
+  const q = (t) => dupeQuality.get(t.path) || { score: 0, size: 0 };
+  return g.reduce((a, b) => (q(b).score > q(a).score || (q(b).score === q(a).score && q(b).size > q(a).size) ? b : a));
+}
+
 function renderDupesPage() {
   const body = $("page-body");
   body.dataset.all = "dupes";
@@ -3875,19 +3882,67 @@ function renderDupesPage() {
   pageAll = pageSongs;
   pageAlbums = [];
   const extra = dupes.groups.reduce((s, g) => s + g.length - 1, 0);
+  const missing = pageSongs.filter((t) => !dupeQuality.has(t.path));
+  if (missing.length) {
+    // find out each file's format and quality, then show which copy is the best
+    invoke("song_quality", { paths: missing.map((t) => t.path) }).then((q) => {
+      for (const [p, v] of Object.entries(q)) dupeQuality.set(p, v);
+      if (pageStack[pageStack.length - 1]?.kind === "dupes") renderDupesPage();
+    }, () => {});
+  }
+  const ready = !missing.length;
   let i = 0;
-  body.innerHTML = `<h1 class="page-h1">Duplicates</h1>` +
+  body.innerHTML = `<header class="stats-head"><h1 class="page-h1">Duplicates</h1>` +
+    (dupes.groups.length ? `<button class="btn accent" data-dupe-all ${ready ? "" : "disabled"}>Remove all duplicates</button>` : "") + `</header>` +
     (dupes.groups.length
       ? `<p class="hint">${countOf(dupes.groups.length, "song")} ${dupes.groups.length === 1 ? "is" : "are"} in the library more than once (${countOf(extra, "extra copy").replace("copys", "copies")}). ` +
-        `${phone ? "Deleting removes the file." : "Deleting moves the file to the bin."}</p>` +
-        dupes.groups.map((g) => `<div class="dupe-group"><div class="dupe-title">${esc(g[0].title)} <span class="hint">${esc(g[0].artist)}</span></div>` +
-          g.map((t) => `<div class="dupe-row" data-i="${i++}"><button class="icon-btn" data-dupe="play" title="Play"><svg viewBox="0 0 24 24"><use href="#i-play" /></svg></button>` +
-            `<div class="dupe-file"><div>${esc(t.album || "No album")} <span class="tag">${esc(extOf(t.path))}</span> <span class="hint">${fmtTime(t.duration)}</span></div>` +
-            `<div class="hint path" title="${esc(t.path)}">${esc(t.path)}</div></div>` +
-            (phone ? "" : `<button class="btn" data-dupe="reveal">Show</button>`) +
-            `<button class="btn danger" data-dupe="delete">Delete</button></div>`).join("") + `</div>`).join("")
+        `<b>Remove all duplicates</b> keeps the best copy of each — lossless before lossy, then the highest quality — and ${phone ? "deletes" : "moves to the bin"} the rest. ` +
+        `Favourites, playlists, ratings and play counts go to the copy that's kept.</p>` +
+        dupes.groups.map((g) => {
+          const keep = ready ? bestCopy(g) : null;
+          return `<div class="dupe-group"><div class="dupe-title">${esc(g[0].title)} <span class="hint">${esc(g[0].artist)}</span></div>` +
+            g.map((t) => `<div class="dupe-row${t === keep ? " keep" : ""}" data-i="${i++}"><button class="icon-btn" data-dupe="play" title="Play"><svg viewBox="0 0 24 24"><use href="#i-play" /></svg></button>` +
+              `<div class="dupe-file"><div>${esc(t.album || "No album")} <span class="tag">${esc(dupeQuality.get(t.path)?.label || extOf(t.path))}</span> <span class="hint">${fmtTime(t.duration)}</span>` +
+              (t === keep ? ` <span class="tag best">Best · kept</span>` : "") + `</div>` +
+              `<div class="hint path" title="${esc(t.path)}">${esc(t.path)}</div></div>` +
+              (phone ? "" : `<button class="btn" data-dupe="reveal">Show</button>`) +
+              `<button class="btn danger" data-dupe="delete">Delete</button></div>`).join("") + `</div>`;
+        }).join("")
       : `<p class="stat-empty">No duplicates — every song is in the library once.</p>`);
 }
+
+/** Keep the best copy of every duplicated song and delete the rest. */
+async function removeAllDuplicates() {
+  const groups = dupes.groups.filter((g) => g.length > 1);
+  const extra = groups.reduce((s, g) => s + g.length - 1, 0);
+  if (!extra) return;
+  if (!(await ask({
+    title: `Remove ${countOf(extra, "duplicate")}?`,
+    text: `Keeps the best copy of each of the ${countOf(groups.length, "song")} and ${phone ? "deletes the other files for good" : "moves the other files to the bin"}.`,
+    ok: "Remove", danger: true,
+  }))) return;
+  const resume = releasePlaying(groups.flat().filter((t) => !groups.some((g) => bestCopy(g) === t)).map((t) => t.path));
+  let r;
+  try {
+    r = await invoke("remove_duplicates", { groups: groups.map((g) => g.map((t) => t.path)) });
+  } catch (e) {
+    resume();
+    return setStatus(String(e), 6000);
+  }
+  // a deleted copy that was playing gives way to the kept one
+  const gaveWay = new Map(r.removed);
+  for (const t of state.queue) if (gaveWay.has(t.path)) Object.assign(t, state.tracks.find((x) => x.path === gaveWay.get(t.path)) || {});
+  state.tracks = state.tracks.filter((t) => !gaveWay.has(t.path));
+  state.favorites = new Set(r.settings.favorites || []);
+  state.playlists = r.settings.playlists || [];
+  plSets.clear();
+  state.stats = (await invoke("get_stats").catch(() => null)) || state.stats;
+  resume();
+  applySearch();
+  renderDupesPage();
+  setStatus(`Removed ${countOf(r.removed.length, "duplicate")}` + (r.failed.length ? ` · ${r.failed.length} couldn't be: ${r.failed[0]}` : ""), 6000);
+}
+$("page-body").addEventListener("click", (e) => e.target.closest("[data-dupe-all]") && removeAllDuplicates());
 
 $("page-body").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-dupe]");

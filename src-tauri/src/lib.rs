@@ -12,6 +12,7 @@ mod library;
 mod lyrics;
 mod m3u;
 mod musicbrainz;
+mod quality;
 #[cfg(desktop)]
 mod share;
 mod slsk;
@@ -470,6 +471,104 @@ fn delete_song(state: State<AppState>, path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| format!("Couldn't delete it: {e}"))?;
     tracks.retain(|t| t.path != path);
     Ok(())
+}
+
+/// The format and quality of library songs, for the duplicates page.
+#[tauri::command]
+async fn song_quality(app: AppHandle, paths: Vec<String>) -> Result<HashMap<String, serde_json::Value>, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut out = HashMap::new();
+        for p in paths {
+            if let Ok(file) = library_song(&state, &p) {
+                let q = quality::read(&file);
+                out.insert(p, serde_json::json!({ "label": q.label(), "score": q.score(), "lossless": q.lossless, "size": q.size }));
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
+#[derive(Serialize)]
+struct Deduped {
+    /// copies deleted, and the copy each one gave way to
+    removed: Vec<(String, String)>,
+    failed: Vec<String>,
+    settings: Settings,
+}
+
+/// For each group of copies of one song, keep the best file and delete the others (to the bin on
+/// a computer). Favourites, playlists, play counts and ratings of the deleted copies go to the one
+/// that's kept.
+#[tauri::command]
+async fn remove_duplicates(app: AppHandle, groups: Vec<Vec<String>>) -> Result<Deduped, String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut removed = Vec::new();
+        let mut failed = Vec::new();
+        for group in groups.iter().filter(|g| g.len() > 1) {
+            let files: Vec<PathBuf> = group.iter().filter_map(|p| library_song(&state, p).ok()).collect();
+            if files.len() < 2 {
+                continue;
+            }
+            let qualities: Vec<quality::Quality> = files.iter().map(|f| quality::read(f)).collect();
+            let keep = files[quality::best(&qualities)].to_string_lossy().into_owned();
+            for f in &files {
+                let path = f.to_string_lossy().into_owned();
+                if path == keep {
+                    continue;
+                }
+                #[cfg(desktop)]
+                let gone = trash::delete(f).map_err(|e| e.to_string());
+                #[cfg(mobile)]
+                let gone = std::fs::remove_file(f).map_err(|e| e.to_string());
+                match gone {
+                    Ok(()) => removed.push((path, keep.clone())),
+                    Err(e) => failed.push(format!("{}: {e}", f.display())),
+                }
+            }
+        }
+        let gave_way: HashMap<&str, &str> = removed.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let settings = {
+            let mut s = state.settings.lock().unwrap();
+            let mut favorites: Vec<String> = Vec::new();
+            for f in &s.favorites {
+                let f = gave_way.get(f.as_str()).map(|k| k.to_string()).unwrap_or_else(|| f.clone());
+                if !favorites.contains(&f) {
+                    favorites.push(f);
+                }
+            }
+            s.favorites = favorites;
+            for p in s.playlists.iter_mut() {
+                let mut songs: Vec<String> = Vec::new();
+                for x in &p.songs {
+                    let x = gave_way.get(x.as_str()).map(|k| k.to_string()).unwrap_or_else(|| x.clone());
+                    if !songs.contains(&x) {
+                        songs.push(x);
+                    }
+                }
+                p.songs = songs;
+            }
+            state.save_settings(&s);
+            s.clone()
+        };
+        {
+            let mut stats = state.stats.lock().unwrap();
+            for (gone, keep) in &removed {
+                if let Some(old) = stats.remove(gone) {
+                    let k = stats.entry(keep.clone()).or_default();
+                    k.plays += old.plays;
+                    k.last = k.last.max(old.last);
+                    k.rating = k.rating.max(old.rating);
+                }
+            }
+            library::save_json(&state.data_dir.join("stats.json"), &*stats);
+        }
+        state.tracks.lock().unwrap().retain(|t| !gave_way.contains_key(t.path.as_str()));
+        Ok(Deduped { removed, failed, settings })
+    })
+    .await
 }
 
 /// How much to turn a song down so songs sound equally loud (dB, 0 or less). Only songs in the
@@ -2091,6 +2190,8 @@ pub fn run() {
             import_m3u,
             get_history,
             delete_song,
+            song_quality,
+            remove_duplicates,
             save_many_tags,
             can_self_update,
             install_update,
