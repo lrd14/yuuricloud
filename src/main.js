@@ -896,9 +896,12 @@ function setRepeat(mode) {
 
 /** OS media keys and the system's now-playing controls (Windows' media overlay, macOS Now
  * Playing, Linux MPRIS, the phone lock screen) where the webview supports them. */
-const mediaSession = "mediaSession" in navigator ? navigator.mediaSession : null;
+// On the iPhone the web view's own version of these can't show next and previous song, so a small
+// native plugin takes them over instead (plugins/media-controls, nowPlayingNative below).
+const mediaSession = !ios && "mediaSession" in navigator ? navigator.mediaSession : null;
 let artFor = null;
 function updateMediaSession(t) {
+  nowPlayingNative();
   if (!mediaSession) return;
   const meta = { title: t.title, artist: t.artist, album: t.album };
   mediaSession.metadata = new MediaMetadata({ ...meta, artwork: [] });
@@ -930,11 +933,46 @@ function coverDataUrl(pic) {
   });
 }
 function syncMediaPosition() {
+  nowPlayingNative();
   if (!mediaSession?.setPositionState || !isFinite(audio.duration) || !audio.duration) return;
   try {
     mediaSession.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: audio.playbackRate || 1 });
   } catch {}
 }
+/** iPhone: what's playing, where it's at and whether it's going, for the lock screen. The system
+ * moves the time along by itself, so this only needs to be said when something changes. */
+function nowPlayingNative() {
+  if (!ios) return;
+  const t = current();
+  if (!t) return invoke("plugin:media-controls|clear").catch(() => {});
+  invoke("plugin:media-controls|update", {
+    title: t.title, artist: t.artist, album: t.album || "",
+    duration: isFinite(audio.duration) && audio.duration ? audio.duration : t.duration || 0,
+    position: audio.currentTime || 0, playing: !audio.paused, rate: audio.playbackRate || 1,
+    artwork: t.sc ? null : t.cover || t.thumb || null,
+  }).catch(() => {});
+}
+if (ios) {
+  const listenPlugin = window.__TAURI__.core.addPluginListener;
+  if (listenPlugin) listenPlugin("media-controls", "command", ({ action, position }) => {
+    if (action === "play" || (action === "toggle" && audio.paused)) {
+      if (current()) audio.play().catch(() => {});
+      else togglePlay();
+    } else if (action === "pause" || action === "toggle") {
+      audio.pause();
+    } else if (action === "next") {
+      next();
+    } else if (action === "previous") {
+      prev();
+    } else if (action === "seek" && isFinite(position)) {
+      audio.currentTime = position;
+    }
+    nowPlayingNative();
+  }).catch(() => {});
+  onAudio("ratechange", nowPlayingNative);
+  onAudio("ended", nowPlayingNative);
+}
+
 if (mediaSession) {
   // Play and pause act on the player at once, without the fade: the system's controls (the lock
   // screen, a headset, the keyboard) expect it to happen while they wait.
@@ -998,6 +1036,9 @@ function upcoming() {
 const pre = { path: null, gain: 1 }; // the next song, loaded in the spare player
 let preloading = null;
 async function preloadNext() {
+  // iOS won't let a second player start while the app is in the background, so on the iPhone the
+  // next song loads into the same player when it's time
+  if (ios) return;
   const n = upcoming();
   if (!n || n.access === "blocked" || pre.path === n.path || preloading === n.path) return;
   preloading = n.path;

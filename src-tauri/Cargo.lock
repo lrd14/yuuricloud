@@ -4509,6 +4509,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-media-controls"
+version = "0.1.0"
+dependencies = [
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
 name = "tauri-plugin-opener"
 version = "2.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6018,6 +6026,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
+ "tauri-plugin-media-controls",
  "tauri-plugin-opener",
  "tauri-plugin-updater",
  "tiny_http",

@@ -2150,7 +2150,7 @@ fn quit_app(app: AppHandle) {
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
     #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_deep_link::init());
+    let builder = builder.plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_media_controls::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder

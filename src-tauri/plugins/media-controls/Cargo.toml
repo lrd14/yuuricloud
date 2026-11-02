@@ -1,0 +1,13 @@
+[package]
+name = "tauri-plugin-media-controls"
+version = "0.1.0"
+edition = "2021"
+description = "The iPhone's lock screen and Control Center controls for yuuricloud"
+publish = false
+links = "tauri-plugin-media-controls"
+
+[dependencies]
+tauri = { version = "2" }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
