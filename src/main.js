@@ -936,23 +936,44 @@ function syncMediaPosition() {
   } catch {}
 }
 if (mediaSession) {
+  // Play and pause act on the player at once, without the fade: the system's controls (the lock
+  // screen, a headset, the keyboard) expect it to happen while they wait.
   const handlers = {
-    play: startPlayback,
-    pause: pausePlayback,
-    stop: pausePlayback,
-    previoustrack: prev,
+    play: () => {
+      fadeId++;
+      audio.volume = vol();
+      audio.play().catch(() => {});
+    },
+    pause: () => {
+      fadeId++;
+      audio.pause();
+      audio.volume = vol();
+    },
+    stop: () => audio.pause(),
+    previoustrack: () => prev(),
     nexttrack: () => next(),
-    seekbackward: (d) => seekBy(-(d.seekOffset || 10)),
-    seekforward: (d) => seekBy(d.seekOffset || 10),
     seekto: (d) => {
       if (isFinite(d.seekTime)) audio.currentTime = d.seekTime;
       syncMediaPosition();
     },
   };
+  // On a phone, offering "skip 10 seconds" makes the lock screen show those instead of the
+  // previous and next song buttons, so they're only offered on a computer.
+  if (!phone) {
+    handlers.seekbackward = (d) => seekBy(-(d.seekOffset || 10));
+    handlers.seekforward = (d) => seekBy(d.seekOffset || 10);
+  }
   for (const [name, fn] of Object.entries(handlers)) {
     try {
       mediaSession.setActionHandler(name, fn);
     } catch {} // not every webview knows every action
+  }
+  if (phone) {
+    for (const name of ["seekbackward", "seekforward"]) {
+      try {
+        mediaSession.setActionHandler(name, null);
+      } catch {}
+    }
   }
 }
 
@@ -1161,6 +1182,7 @@ onAudio("seeked", () => {
   discordSync();
 });
 onAudio("ended", () => {
+  if (mediaSession) mediaSession.playbackState = "paused"; // until the next song starts
   scrob.track = null; // so a repeated song scrobbles again
   next(true);
 });
