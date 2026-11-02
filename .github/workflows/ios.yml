@@ -35,6 +35,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
+          # swift-rs needs llvm-objcopy to keep the Swift plugins' entry points visible with Xcode 27
+          components: llvm-tools
 
       - uses: swatinem/rust-cache@v2
         with:
