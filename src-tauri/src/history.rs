@@ -45,6 +45,23 @@ pub fn read(dir: &Path) -> Vec<Listen> {
         .collect()
 }
 
+/// Rewrite the songs' paths in the history (when the app's folder has moved, see container.rs).
+pub fn rebase(dir: &Path, fix: impl Fn(&str) -> Option<String>) {
+    let mut all = read(dir);
+    let mut changed = false;
+    for l in all.iter_mut() {
+        if let Some(new) = fix(&l.path) {
+            l.path = new;
+            changed = true;
+        }
+    }
+    if !changed {
+        return;
+    }
+    let text: String = all.iter().filter_map(|l| serde_json::to_string(l).ok()).map(|l| l + "\n").collect();
+    let _ = fs::write(dir.join(FILE), text);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

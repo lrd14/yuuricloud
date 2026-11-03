@@ -3,6 +3,7 @@
 
 mod backup;
 mod computer;
+mod container;
 mod cover_color;
 mod downloads;
 mod editor;
@@ -2146,6 +2147,44 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// Point every saved path at the app's folder as it is now (see container.rs), and save what
+/// changed.
+fn move_to_app_folder(home: &str, data_dir: &Path, settings: &mut Settings, tracks: &mut Vec<Track>, stats: &mut HashMap<String, PlayStat>) {
+    let fix = |p: &mut String| match container::rebase(p, home) {
+        Some(new) => {
+            *p = new;
+            true
+        }
+        None => false,
+    };
+    let mut changed = false;
+    for p in settings.favorites.iter_mut().chain(settings.folders.iter_mut()).chain(settings.playlists.iter_mut().flat_map(|l| l.songs.iter_mut())) {
+        changed |= fix(p);
+    }
+    if changed {
+        library::save_json(&data_dir.join("settings.json"), &*settings);
+    }
+    let mut tracks_changed = false;
+    for t in tracks.iter_mut() {
+        for p in [&mut t.path, &mut t.root, &mut t.cover, &mut t.thumb] {
+            tracks_changed |= fix(p);
+        }
+    }
+    if tracks_changed {
+        library::save_json(&data_dir.join("library.json"), &*tracks);
+    }
+    let moved: Vec<(String, String)> = stats.keys().filter_map(|k| container::rebase(k, home).map(|n| (k.clone(), n))).collect();
+    if !moved.is_empty() {
+        for (old, new) in moved {
+            if let Some(st) = stats.remove(&old) {
+                stats.insert(new, st);
+            }
+        }
+        library::save_json(&data_dir.join("stats.json"), &*stats);
+    }
+    history::rebase(data_dir, |p| container::rebase(p, home));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
@@ -2171,7 +2210,13 @@ pub fn run() {
             let _ = std::fs::create_dir_all(data_dir.join("soundcloud-cache"));
             allow_dir(handle, &data_dir.join("soundcloud-cache"));
 
-            let stats: HashMap<String, PlayStat> = library::load_json(&data_dir.join("stats.json")).unwrap_or_default();
+            let mut stats: HashMap<String, PlayStat> = library::load_json(&data_dir.join("stats.json")).unwrap_or_default();
+            // iOS may have moved the app to a new folder since the last start (an update or a
+            // reinstall does that): follow the songs there, or favourites and the rest are lost
+            let (mut settings, mut tracks) = (settings, tracks);
+            if let Some(home) = app.path().document_dir().ok().and_then(|d| container::current_home(&d)) {
+                move_to_app_folder(&home, &data_dir, &mut settings, &mut tracks, &mut stats);
+            }
             app.manage(AppState {
                 stats: Mutex::new(stats),
                 remote: Mutex::new(serde_json::Value::Null),
