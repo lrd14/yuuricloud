@@ -931,10 +931,11 @@
                         it in yuuricloud on the phone, under Settings → Integrations → Phone &amp; computer.
                       </p>
                       <p class="hint">
-                        If the phone can't connect, allow yuuricloud on private networks when your computer asks, or in
-                        its firewall settings. A new code is made each time you turn this on.
+                        If the phone says it can't reach this computer, let yuuricloud through the firewall<span class="windows-only"> with the
+                        button below (Windows asks for permission)</span>. A new code is made each time you turn this on.
                       </p>
-                      <div class="actions"><button id="share-copy" class="btn">Copy code</button></div>
+                      <div class="actions"><button id="share-copy" class="btn">Copy code</button><button id="share-firewall" class="btn windows-only">Allow through firewall</button></div>
+                      <p id="share-firewall-status" class="hint"></p>
                     </div>
                   </div>
                 </div>

@@ -3502,6 +3502,21 @@ $("share-on").addEventListener("change", async (e) => {
   }
   renderIntegrations();
 });
+$("share-firewall").addEventListener("click", async () => {
+  const b = $("share-firewall"), status = $("share-firewall-status");
+  b.disabled = true;
+  status.className = "hint";
+  status.textContent = "Windows will ask for permission…";
+  try {
+    await invoke("allow_firewall");
+    status.className = "hint ok";
+    status.textContent = "Done: phones can reach yuuricloud now. Try pairing again.";
+  } catch (e) {
+    status.className = "hint err";
+    status.textContent = String(e);
+  }
+  b.disabled = false;
+});
 $("share-copy").addEventListener("click", () => share && copyText(share.link, "Code copied — paste it in yuuricloud on your phone"));
 function reportNow() {
   const t = current();
@@ -3551,9 +3566,10 @@ async function pairComputer(code) {
   } catch (e) {
     $("pc-status-phone").className = "hint err";
     $("pc-status-phone").textContent = String(e);
-    return;
+    return false;
   }
   renderIntegrations();
+  return true;
 }
 $("pc-link").addEventListener("click", () => pairComputer($("pc-code").value));
 $("pc-unlink").addEventListener("click", async () => {
@@ -3612,8 +3628,13 @@ document.addEventListener("click", async (e) => {
   const code = await scanQr();
   if (!code) return;
   if (code.startsWith("yuuricloud://pair")) {
+    setStatus("Pairing with your computer…");
+    if (await pairComputer(code)) return; // it said so
+    // show why not where it can be read
+    setStatus(`Couldn't pair: ${$("pc-status-phone").textContent}`, 12000);
     openSettings();
-    await pairComputer(code);
+    el.settings.querySelector('.settings-tabs button[data-tab="integrations"]')?.click();
+    el.settings.querySelector('#int-nav button[data-int="pc"]')?.click();
   } else if (code.startsWith("yuuricloud://soundcloud")) {
     openSettings();
     $("sc-link-code").value = code;

@@ -1376,6 +1376,38 @@ fn share_info(s: &share::Share) -> ShareInfo {
     ShareInfo { address: s.address.clone(), qr: soundcloud::qr_svg(&link).unwrap_or_default(), link }
 }
 
+/// Windows: let phones reach yuuricloud through Windows Firewall, for private and public
+/// networks (Windows only asks about one, and a home Wi-Fi is often set as public). Asks for
+/// administrator permission.
+#[tauri::command]
+async fn allow_firewall() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+        // one elevated cmd runs both netsh commands (one permission question); netsh reads the
+        // quotes itself, so a path with spaces is fine
+        let netsh = format!(
+            "/c netsh advfirewall firewall delete rule name=\"yuuricloud\" >nul & netsh advfirewall firewall add rule name=\"yuuricloud\" dir=in action=allow program=\"{exe}\" enable=yes profile=any"
+        );
+        let script = format!("Start-Process cmd -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '{}'", netsh.replace('\'', "''"));
+        let status = blocking(move || {
+            let mut cmd = std::process::Command::new("powershell");
+            cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // no console window
+            }
+            cmd.status().map_err(|e| e.to_string())
+        })
+        .await?;
+        if status.success() { Ok(()) } else { Err("Windows didn't allow it (the permission question was turned down?)".into()) }
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Only Windows needs this".into())
+    }
+}
+
 /// Computer: what's playing, for the phone's remote (the frontend reports it every second or so
 /// while sharing is on).
 #[tauri::command]
@@ -1404,12 +1436,8 @@ async fn computer_link(app: AppHandle, code: String) -> Result<Settings, String>
 }
 
 fn pair_computer(state: &AppState, code: &str) -> Result<Settings, String> {
-    let mut link = computer::from_link(code)?;
-    // check it answers, and take the name it gives
-    let hello = computer::get_json(&link, "/hello")?;
-    if let Some(name) = hello["name"].as_str() {
-        link.name = name.to_string();
-    }
+    // check it answers (on one of its addresses), and take the name it gives
+    let link = computer::reach(&computer::from_link(code)?)?;
     let mut s = state.settings.lock().unwrap();
     s.computer = link;
     state.save_settings(&s);
@@ -2310,6 +2338,7 @@ pub fn run() {
             remove_duplicates,
             computer_sync_favorites,
             take_link_outcome,
+            allow_firewall,
             save_many_tags,
             can_self_update,
             install_update,

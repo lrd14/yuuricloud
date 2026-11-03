@@ -60,6 +60,8 @@ pub struct Share {
     stop: Arc<AtomicBool>,
     pub token: String,
     pub address: String,
+    /// this computer's other network addresses (no port), for the phone to try too
+    pub others: Vec<String>,
 }
 
 impl Drop for Share {
@@ -100,13 +102,29 @@ fn lan_address() -> Option<String> {
     Some(socket.local_addr().ok()?.ip().to_string())
 }
 
+/// Every address this computer has on a home network (private IPv4 ones), the likeliest first.
+/// The phone tries them in turn: the "likeliest" can be a virtual network adapter's (Hyper-V,
+/// WSL, VirtualBox) that the phone can't reach.
+fn lan_addresses() -> Vec<String> {
+    let mut out: Vec<String> = lan_address().into_iter().collect();
+    for iface in if_addrs::get_if_addrs().unwrap_or_default() {
+        let std::net::IpAddr::V4(ip) = iface.ip() else { continue };
+        if ip.is_private() && !ip.is_loopback() && !ip.is_link_local() && !out.contains(&ip.to_string()) {
+            out.push(ip.to_string());
+        }
+    }
+    out
+}
+
 fn computer_name() -> String {
     std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "Computer".into())
 }
 
 pub fn start(app: &AppHandle) -> Result<Share, String> {
-    let ip = lan_address().ok_or("This computer doesn't seem to be on a network")?;
-    let (share, _) = serve(Arc::new(App(app.clone())), ("0.0.0.0", DEFAULT_PORT), &ip)?;
+    let ips = lan_addresses();
+    let ip = ips.first().ok_or("This computer doesn't seem to be on a network")?;
+    let (mut share, _) = serve(Arc::new(App(app.clone())), ("0.0.0.0", DEFAULT_PORT), ip)?;
+    share.others = ips[1..].to_vec();
     Ok(share)
 }
 
@@ -135,12 +153,16 @@ fn serve(source: Arc<dyn Source>, bind: (&str, u16), ip: &str) -> Result<(Share,
             }
         }
     });
-    Ok((Share { stop, token, address: format!("{ip}:{port}") }, port))
+    Ok((Share { stop, token, address: format!("{ip}:{port}"), others: Vec::new() }, port))
 }
 
 /// The link the phone opens: from the QR code, or pasted.
 pub fn pair_link(share: &Share) -> String {
-    format!("yuuricloud://pair?h={}&t={}&n={}", share.address, share.token, url_encode(&computer_name()))
+    let mut link = format!("yuuricloud://pair?h={}&t={}&n={}", share.address, share.token, url_encode(&computer_name()));
+    if !share.others.is_empty() {
+        link += &format!("&a={}", share.others.join(","));
+    }
+    link
 }
 
 fn url_encode(s: &str) -> String {

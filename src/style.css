@@ -1290,3 +1290,5 @@ html.scanning body > :not(#scanner), html.scanning #app { visibility: hidden !im
 .scanner-frame { width: min(70vw, 70vh, 300px); aspect-ratio: 1; border: 3px solid #fff; border-radius: 22px; box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.5); }
 .scanner-hint { position: relative; z-index: 1; max-width: 320px; margin: 0; text-align: center; font-size: 16px; font-weight: 600; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6); }
 .scanner .btn { position: relative; z-index: 1; min-width: 140px; background: rgba(30, 32, 40, 0.85); color: #fff; }
+
+body:not(.windows) .windows-only { display: none !important; }
