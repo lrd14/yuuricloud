@@ -379,6 +379,12 @@
       </section>
     </div>
 
+    <div id="scanner" class="scanner" hidden>
+      <p class="scanner-hint">Point the camera at the QR code yuuricloud shows on your computer</p>
+      <div class="scanner-frame"></div>
+      <button id="scanner-cancel" class="btn">Cancel</button>
+    </div>
+
     <aside id="queue" class="queue-panel" hidden>
       <header class="queue-head">
         <div>
@@ -711,6 +717,7 @@
                   <div class="fields">
                     <label>Link code<input id="sc-link-code" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="yuuricloud://soundcloud/…" /></label>
                     <button id="sc-link" class="btn">Link</button>
+                    <button class="btn mobile-only" data-scan="sc">Scan…</button>
                   </div>
                 </div>
               </div>
@@ -951,6 +958,7 @@
                     <div class="fields">
                       <label>Pairing code<input id="pc-code" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="yuuricloud://pair?…" /></label>
                       <button id="pc-link" class="btn">Pair</button>
+                      <button class="btn accent" data-scan="pc">Scan…</button>
                     </div>
                   </div>
                   <div id="pc-actions" class="row" hidden>

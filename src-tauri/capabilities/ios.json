@@ -4,5 +4,5 @@
   "description": "The iPhone's lock screen controls",
   "windows": ["main"],
   "platforms": ["iOS"],
-  "permissions": ["media-controls:default"]
+  "permissions": ["media-controls:default", "barcode-scanner:default"]
 }

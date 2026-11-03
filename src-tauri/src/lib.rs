@@ -776,6 +776,14 @@ fn link_soundcloud(state: &AppState, code: &str) -> Result<Settings, String> {
     Ok(s.clone())
 }
 
+/// How the last pairing from a link went, until the frontend has asked (it may have missed the event).
+static LINK_OUTCOME: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+
+#[tauri::command]
+fn take_link_outcome() -> Option<serde_json::Value> {
+    LINK_OUTCOME.lock().unwrap().take()
+}
+
 /// Phones: scanning the computer's QR code opens the app with a `yuuricloud://soundcloud/...` link.
 #[cfg(mobile)]
 fn open_links(app: &tauri::App) {
@@ -783,11 +791,23 @@ fn open_links(app: &tauri::App) {
     fn apply(app: &AppHandle, urls: Vec<tauri::Url>) {
         for url in urls.iter().filter(|u| u.scheme() == "yuuricloud") {
             // the computer's pairing QR code
+            // It asks the computer over the network, so not here: this runs on the main thread,
+            // often while the app is still starting, and iOS ends an app whose main thread is
+            // held up (and the local network permission question can't show meanwhile).
             if url.host_str() == Some("pair") {
-                match pair_computer(&app.state::<AppState>(), url.as_str()) {
-                    Ok(settings) => drop(app.emit("computer-linked", settings)),
-                    Err(e) => drop(app.emit("sc-link-failed", e)),
-                }
+                let (app, code) = (app.clone(), url.to_string());
+                std::thread::spawn(move || {
+                    let outcome = pair_computer(&app.state::<AppState>(), &code);
+                    // the frontend may not be listening yet, if the link started the app
+                    *LINK_OUTCOME.lock().unwrap() = Some(match &outcome {
+                        Ok(s) => serde_json::json!({ "ok": true, "name": s.computer.name }),
+                        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+                    });
+                    match outcome {
+                        Ok(settings) => drop(app.emit("computer-linked", settings)),
+                        Err(e) => drop(app.emit("computer-link-failed", e)),
+                    }
+                });
                 continue;
             }
             // SoundCloud's approval coming back for the sign-in `phone_sign_in` is waiting on
@@ -2189,7 +2209,10 @@ fn move_to_app_folder(home: &str, data_dir: &Path, settings: &mut Settings, trac
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
     #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_deep_link::init()).plugin(tauri_plugin_media_controls::init());
+    let builder = builder
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_media_controls::init())
+        .plugin(tauri_plugin_barcode_scanner::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
@@ -2286,6 +2309,7 @@ pub fn run() {
             song_quality,
             remove_duplicates,
             computer_sync_favorites,
+            take_link_outcome,
             save_many_tags,
             can_self_update,
             install_update,

@@ -35,6 +35,8 @@ base64 = "0.22"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # The iPhone's lock screen controls (plugins/media-controls); does nothing elsewhere.
 tauri-plugin-media-controls = { path = "plugins/media-controls" }
+# Scanning the computer's QR codes with the phone's camera (an empty crate on computers).
+tauri-plugin-barcode-scanner = "2"
 # The Soulseek client the iOS app has built in, since iOS can't run slskd.
 soulseek-rs-lib = "19.1"
 

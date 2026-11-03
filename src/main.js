@@ -3560,6 +3560,69 @@ $("pc-unlink").addEventListener("click", async () => {
   state.settings = await invoke("computer_unlink");
   renderIntegrations();
 });
+// pairing from a link that opened the app: an error, or one that finished before this listened
+function linkFailed(e) {
+  $("pc-status-phone").className = "hint err";
+  $("pc-status-phone").textContent = String(e);
+  setStatus(`Couldn't pair: ${e}`, 8000);
+}
+listen("computer-link-failed", ({ payload }) => linkFailed(payload));
+// after the library has loaded and said its piece in the status line
+if (phone) setTimeout(() => {
+  invoke("take_link_outcome").then(async (o) => {
+    if (!o) return;
+    if (!o.ok) return linkFailed(o.error);
+    state.settings = (await invoke("get_library")).settings;
+    setStatus(`Paired with ${o.name}`, 3000);
+    renderIntegrations();
+  }, () => {});
+}, 2500);
+
+// ------------------------------------------------------------- scanning QR codes
+// The camera shows behind the page (the scanner plugin's "windowed" mode), with a frame and a
+// Cancel button on top; everything else hides meanwhile.
+
+async function scanQr() {
+  const plugin = (cmd, args) => invoke(`plugin:barcode-scanner|${cmd}`, args);
+  try {
+    let perm = await plugin("check_permissions").catch(() => null);
+    if (perm?.camera !== "granted") perm = await plugin("request_permissions");
+    if (perm?.camera !== "granted") {
+      setStatus("yuuricloud isn't allowed to use the camera. Turn it on in the iPhone's Settings → yuuricloud.", 8000);
+      return null;
+    }
+  } catch {}
+  closeSettings();
+  document.documentElement.classList.add("scanning");
+  $("scanner").hidden = false;
+  try {
+    const r = await plugin("scan", { windowed: true, formats: ["QR_CODE"] });
+    return r?.content || null;
+  } catch {
+    return null; // cancelled
+  } finally {
+    document.documentElement.classList.remove("scanning");
+    $("scanner").hidden = true;
+  }
+}
+$("scanner-cancel").addEventListener("click", () => invoke("plugin:barcode-scanner|cancel").catch(() => {}));
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-scan]");
+  if (!b) return;
+  const code = await scanQr();
+  if (!code) return;
+  if (code.startsWith("yuuricloud://pair")) {
+    openSettings();
+    await pairComputer(code);
+  } else if (code.startsWith("yuuricloud://soundcloud")) {
+    openSettings();
+    $("sc-link-code").value = code;
+    $("sc-link").click();
+  } else {
+    setStatus("That QR code isn't one from yuuricloud", 5000);
+  }
+});
+
 listen("computer-linked", ({ payload }) => {
   state.settings = payload;
   setStatus(`Paired with ${payload.computer.name}`, 3000);

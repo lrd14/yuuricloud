@@ -1279,3 +1279,14 @@ body.phone .np-tools { justify-content: flex-start; }
 .remote-queue-list .name, .remote-queue-list .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .remote-queue-list .sub { color: var(--muted); font-size: 12.5px; }
 .queue-empty { padding: 10px; }
+
+/* Scanning a QR code: the camera shows behind the page, so everything else steps aside */
+html.scanning, html.scanning body, html.scanning #app { background: transparent !important; }
+html.scanning body > :not(#scanner), html.scanning #app { visibility: hidden !important; }
+.scanner {
+  position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; visibility: visible !important;
+  padding: calc(env(safe-area-inset-top) + 20px) 24px calc(env(safe-area-inset-bottom) + 24px); color: #fff;
+}
+.scanner-frame { width: min(70vw, 70vh, 300px); aspect-ratio: 1; border: 3px solid #fff; border-radius: 22px; box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.5); }
+.scanner-hint { position: relative; z-index: 1; max-width: 320px; margin: 0; text-align: center; font-size: 16px; font-weight: 600; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6); }
+.scanner .btn { position: relative; z-index: 1; min-width: 140px; background: rgba(30, 32, 40, 0.85); color: #fff; }
