@@ -55,9 +55,170 @@ const state = {
   },
 };
 
+// iPhone: songs play natively (plugins/media-controls), not in the web view. The web view's own
+// player gets iOS's "skip 10 seconds" lock screen controls that fight with everything else, and it
+// can't start the next song while the app is in the background. NativePlayer stands in for an
+// <audio> element, so the rest of the app doesn't need to know: it hands the native player the
+// current song and the ones after it, and turns its reports back into the usual media events.
+const onIPhone = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const nativeCall = (cmd, args) => window.__TAURI__.core.invoke(`plugin:media-controls|${cmd}`, args);
+class NativePlayer extends EventTarget {
+  constructor(inert = false) {
+    super();
+    this.inert = inert; // the second player: never used, as songs follow each other natively
+    this._path = null;
+    this._paused = true;
+    this._pos = 0;
+    this._at = performance.now();
+    this._dur = NaN;
+    this._vol = 1;
+    this._muted = false;
+    this._rate = 1;
+    this.error = null;
+    this.preload = "auto";
+    this.preservesPitch = true;
+  }
+  get paused() { return this._paused; }
+  get duration() { return this._dur; }
+  get readyState() { return this._path && isFinite(this._dur) ? 4 : 0; }
+  get currentTime() {
+    return this._paused ? this._pos : Math.min(this._pos + ((performance.now() - this._at) / 1000) * this._rate, isFinite(this._dur) ? this._dur : Infinity);
+  }
+  set currentTime(v) {
+    this._pos = Math.max(0, v);
+    this._at = performance.now();
+    if (this.inert || !this._path) return;
+    nativeCall("seek", { position: this._pos }).catch(() => {});
+    this.dispatchEvent(new Event("seeked"));
+    this.dispatchEvent(new Event("timeupdate"));
+  }
+  get volume() { return this._vol; }
+  set volume(v) {
+    this._vol = v;
+    if (!this.inert) nativeCall("set_volume", { volume: this._muted ? 0 : v }).catch(() => {});
+    this.dispatchEvent(new Event("volumechange"));
+  }
+  get muted() { return this._muted; }
+  set muted(m) {
+    this._muted = m;
+    this.volume = this._vol;
+  }
+  get playbackRate() { return this._rate; }
+  set playbackRate(r) {
+    this._rate = r;
+    if (!this.inert) nativeCall("set_rate", { rate: r }).catch(() => {});
+    this.dispatchEvent(new Event("ratechange"));
+  }
+  get defaultPlaybackRate() { return this._rate; }
+  set defaultPlaybackRate(r) { this.playbackRate = r; }
+  /** A song file to play (not a URL). */
+  setPath(path) {
+    if (path === this._path) return;
+    this._path = path;
+    this._pos = 0;
+    this._dur = NaN;
+    this.error = null;
+    if (!this.inert) nativeSync({ play: !this._paused });
+  }
+  getAttribute(name) { return name === "src" ? this._path : null; }
+  removeAttribute(name) {
+    if (name !== "src" || !this._path) return;
+    this._path = null;
+    this._pos = 0;
+    if (!this.inert) nativeCall("stop").catch(() => {});
+  }
+  load() {}
+  play() {
+    if (this.inert || !this._path) return Promise.resolve();
+    if (this._paused) {
+      this._paused = false;
+      this._at = performance.now();
+      this.dispatchEvent(new Event("play"));
+    }
+    return nativeSync({ play: true });
+  }
+  pause() {
+    if (this.inert || this._paused) return;
+    this._pos = this.currentTime;
+    this._paused = true;
+    nativeCall("pause").catch(() => {});
+    this.dispatchEvent(new Event("pause"));
+  }
+  /** A report from the native player. */
+  report(s) {
+    const wasPaused = this._paused, hadDur = isFinite(this._dur);
+    this._pos = s.position;
+    this._at = performance.now();
+    if (s.duration > 0) this._dur = s.duration;
+    if (s.error && s.path === this._path && !this.error) {
+      this.error = { message: s.error };
+      this.dispatchEvent(new Event("error"));
+    }
+    if (!hadDur && isFinite(this._dur)) this.dispatchEvent(new Event("loadedmetadata"));
+    if (s.ended) {
+      this._paused = true;
+      this.dispatchEvent(new Event("pause"));
+      this.dispatchEvent(new Event("ended"));
+      return;
+    }
+    this._paused = !s.playing;
+    if (wasPaused && s.playing) this.dispatchEvent(new Event("play"));
+    if (!wasPaused && !s.playing) this.dispatchEvent(new Event("pause"));
+    this.dispatchEvent(new Event("timeupdate"));
+  }
+}
+const nativeWin = { start: 0, paths: [] }; // which songs of the queue the native player has
+/** Hand the native player the current song and the ones after it (and a few before, for
+ * Previous). `play` starts or stops it; left out, it keeps doing what it's doing. */
+function nativeSync({ play } = {}) {
+  const p = players[0];
+  if (!p._path) return Promise.resolve();
+  const order = state.order, here = state.pos;
+  const at = (i) => state.queue[order[i]];
+  // the current song as loaded (a SoundCloud song's downloaded file); others only when they're
+  // library songs, as SoundCloud ones are downloaded when it's their turn
+  let start = here;
+  while (start > 0 && here - start < 10 && at(start - 1) && !at(start - 1).sc) start--;
+  const item = (t, path) => ({ path, title: t?.title || "", artist: t?.artist || "", album: t?.album || "", artwork: t && !t.sc ? t.cover || t.thumb || null : null, duration: t?.duration || 0 });
+  const items = [];
+  for (let i = start; i < here; i++) items.push(item(at(i), at(i).path));
+  items.push(item(current(), p._path));
+  for (let i = here + 1; i < order.length && i <= here + 60 && at(i) && !at(i).sc; i++) items.push(item(at(i), at(i).path));
+  nativeWin.start = start;
+  nativeWin.paths = items.map((x) => x.path);
+  return nativeCall("set_queue", { items, index: here - start, position: p._pos || 0, play, repeatOne: state.repeat === REPEAT_ONE }).catch((e) => {
+    p.error = { message: String(e) };
+    p.dispatchEvent(new Event("error"));
+  });
+}
+let nativeResync = 0;
+/** The queue changed (a song added, shuffle switched…): tell the native player, in a moment. */
+function nativeQueueChanged() {
+  if (!onIPhone) return;
+  clearTimeout(nativeResync);
+  nativeResync = setTimeout(() => nativeSync(), 300);
+}
+if (onIPhone) {
+  window.__TAURI__.core.addPluginListener?.("media-controls", "state", (s) => {
+    const p = players[0];
+    // the native player went on to another song by itself: at the end of one, or from the lock screen
+    if (s.path && p._path && s.path !== p._path && nativeWin.paths[s.index] === s.path) {
+      const pos = nativeWin.start + s.index;
+      if (state.queue[state.order[pos]]?.path === s.path) {
+        p._path = s.path; // already playing there: don't load it again
+        p._dur = NaN;
+        state.pos = pos;
+        if (state.shuffle === SHUFFLE_RANDOM) fillRandom();
+        playCurrent(s.playing);
+      }
+    }
+    if (s.path === p._path || !s.path) p.report(s);
+  })?.catch?.(() => {});
+}
+
 // Two players: the song that's playing, and the next one loading in the other, so it can start
 // without a gap or fade in over the end of this one. `audio` is whichever is playing.
-const players = [new Audio(), new Audio()];
+const players = onIPhone ? [new NativePlayer(), new NativePlayer(true)] : [new Audio(), new Audio()];
 for (const p of players) p.preload = "auto";
 let audio = players[0];
 const spare = () => (audio === players[0] ? players[1] : players[0]);
@@ -892,16 +1053,16 @@ function setRepeat(mode) {
   el.repeatIcon.setAttribute("href", state.repeat === REPEAT_ONE ? "#i-repeat-one" : "#i-repeat");
   el.repeat.title = `Repeat: ${["off", "all", "one"][state.repeat]}`;
   if (prefs.rememberModes && prefs.repeat !== state.repeat) setPref("repeat", state.repeat);
+  nativeQueueChanged();
 }
 
 /** OS media keys and the system's now-playing controls (Windows' media overlay, macOS Now
  * Playing, Linux MPRIS, the phone lock screen) where the webview supports them. */
 // On the iPhone the web view's own version of these can't show next and previous song, so a small
-// native plugin takes them over instead (plugins/media-controls, nowPlayingNative below).
+// native player takes them over instead (plugins/media-controls, NativePlayer above).
 const mediaSession = !ios && "mediaSession" in navigator ? navigator.mediaSession : null;
 let artFor = null;
 function updateMediaSession(t) {
-  nowPlayingNative();
   if (!mediaSession) return;
   const meta = { title: t.title, artist: t.artist, album: t.album };
   mediaSession.metadata = new MediaMetadata({ ...meta, artwork: [] });
@@ -933,46 +1094,11 @@ function coverDataUrl(pic) {
   });
 }
 function syncMediaPosition() {
-  nowPlayingNative();
   if (!mediaSession?.setPositionState || !isFinite(audio.duration) || !audio.duration) return;
   try {
     mediaSession.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: audio.playbackRate || 1 });
   } catch {}
 }
-/** iPhone: what's playing, where it's at and whether it's going, for the lock screen. The system
- * moves the time along by itself, so this only needs to be said when something changes. */
-function nowPlayingNative() {
-  if (!ios) return;
-  const t = current();
-  if (!t) return invoke("plugin:media-controls|clear").catch(() => {});
-  invoke("plugin:media-controls|update", {
-    title: t.title, artist: t.artist, album: t.album || "",
-    duration: isFinite(audio.duration) && audio.duration ? audio.duration : t.duration || 0,
-    position: audio.currentTime || 0, playing: !audio.paused, rate: audio.playbackRate || 1,
-    artwork: t.sc ? null : t.cover || t.thumb || null,
-  }).catch(() => {});
-}
-if (ios) {
-  const listenPlugin = window.__TAURI__.core.addPluginListener;
-  if (listenPlugin) listenPlugin("media-controls", "command", ({ action, position }) => {
-    if (action === "play" || (action === "toggle" && audio.paused)) {
-      if (current()) audio.play().catch(() => {});
-      else togglePlay();
-    } else if (action === "pause" || action === "toggle") {
-      audio.pause();
-    } else if (action === "next") {
-      next();
-    } else if (action === "previous") {
-      prev();
-    } else if (action === "seek" && isFinite(position)) {
-      audio.currentTime = position;
-    }
-    nowPlayingNative();
-  }).catch(() => {});
-  onAudio("ratechange", nowPlayingNative);
-  onAudio("ended", nowPlayingNative);
-}
-
 if (mediaSession) {
   // Play and pause act on the player at once, without the fade: the system's controls (the lock
   // screen, a headset, the keyboard) expect it to happen while they wait.
@@ -1020,6 +1146,7 @@ if (mediaSession) {
 /** Load a song file into a player. With the equalizer on, the player must ask for it the way the
  * audio engine is allowed to read it. */
 function setSrc(p, file) {
+  if (p instanceof NativePlayer) return p.setPath(file);
   if (graph) p.crossOrigin = "anonymous";
   else p.removeAttribute("crossorigin");
   p.src = convertFileSrc(file);
@@ -4030,7 +4157,7 @@ function renderDupesPage() {
   if (missing.length) {
     // find out each file's format and quality, then show which copy is the best
     invoke("song_quality", { paths: missing.map((t) => t.path) }).then((q) => {
-      for (const [p, v] of Object.entries(q)) dupeQuality.set(p, v);
+      for (const [p, v] of Object.entries(q || {})) dupeQuality.set(p, v);
       if (pageStack[pageStack.length - 1]?.kind === "dupes") renderDupesPage();
     }, () => {});
   }
@@ -4386,6 +4513,7 @@ function queueRowHtml(j, kind) {
 
 /** Draw the queue panel (if it's open): what's playing, what's coming up, and what played before. */
 function renderQueue(scrollToNow = false) {
+  nativeQueueChanged();
   if (!queueOpen()) return;
   const list = $("queue-list");
   const pos = state.pos, order = state.order;

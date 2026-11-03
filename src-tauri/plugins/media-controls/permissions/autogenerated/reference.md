@@ -1,11 +1,16 @@
 ## Default Permission
 
-Show what's playing on the lock screen and take its controls
+Play songs natively and show them on the lock screen
 
 #### This default permission set includes the following:
 
-- `allow-update`
-- `allow-clear`
+- `allow-set-queue`
+- `allow-play`
+- `allow-pause`
+- `allow-seek`
+- `allow-set-volume`
+- `allow-set-rate`
+- `allow-stop`
 - `allow-register-listener`
 - `allow-remove-listener`
 
@@ -21,12 +26,12 @@ Show what's playing on the lock screen and take its controls
 <tr>
 <td>
 
-`media-controls:allow-clear`
+`media-controls:allow-pause`
 
 </td>
 <td>
 
-Enables the clear command without any pre-configured scope.
+Enables the pause command without any pre-configured scope.
 
 </td>
 </tr>
@@ -34,12 +39,38 @@ Enables the clear command without any pre-configured scope.
 <tr>
 <td>
 
-`media-controls:deny-clear`
+`media-controls:deny-pause`
 
 </td>
 <td>
 
-Denies the clear command without any pre-configured scope.
+Denies the pause command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:allow-play`
+
+</td>
+<td>
+
+Enables the play command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:deny-play`
+
+</td>
+<td>
+
+Denies the play command without any pre-configured scope.
 
 </td>
 </tr>
@@ -99,12 +130,12 @@ Denies the remove_listener command without any pre-configured scope.
 <tr>
 <td>
 
-`media-controls:allow-update`
+`media-controls:allow-seek`
 
 </td>
 <td>
 
-Enables the update command without any pre-configured scope.
+Enables the seek command without any pre-configured scope.
 
 </td>
 </tr>
@@ -112,12 +143,116 @@ Enables the update command without any pre-configured scope.
 <tr>
 <td>
 
-`media-controls:deny-update`
+`media-controls:deny-seek`
 
 </td>
 <td>
 
-Denies the update command without any pre-configured scope.
+Denies the seek command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:allow-set-queue`
+
+</td>
+<td>
+
+Enables the set_queue command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:deny-set-queue`
+
+</td>
+<td>
+
+Denies the set_queue command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:allow-set-rate`
+
+</td>
+<td>
+
+Enables the set_rate command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:deny-set-rate`
+
+</td>
+<td>
+
+Denies the set_rate command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:allow-set-volume`
+
+</td>
+<td>
+
+Enables the set_volume command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:deny-set-volume`
+
+</td>
+<td>
+
+Denies the set_volume command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:allow-stop`
+
+</td>
+<td>
+
+Enables the stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`media-controls:deny-stop`
+
+</td>
+<td>
+
+Denies the stop command without any pre-configured scope.
 
 </td>
 </tr>

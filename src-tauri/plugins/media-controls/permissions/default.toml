@@ -1,3 +1,6 @@
 [default]
-description = "Show what's playing on the lock screen and take its controls"
-permissions = ["allow-update", "allow-clear", "allow-register-listener", "allow-remove-listener"]
+description = "Play songs natively and show them on the lock screen"
+permissions = [
+  "allow-set-queue", "allow-play", "allow-pause", "allow-seek", "allow-set-volume", "allow-set-rate", "allow-stop",
+  "allow-register-listener", "allow-remove-listener",
+]
