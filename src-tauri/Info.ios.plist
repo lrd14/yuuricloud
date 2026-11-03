@@ -27,6 +27,8 @@
 		</dict>
 	</array>
 	<!-- Copying songs from, and remote-controlling, yuuricloud on a computer on the same Wi-Fi. -->
+	<key>NSCameraUsageDescription</key>
+	<string>yuuricloud uses the camera to scan the QR codes yuuricloud on your computer shows, to pair with it or sign in to SoundCloud.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>yuuricloud connects to yuuricloud on your computer to copy music and to work as a remote.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>

@@ -3,6 +3,7 @@
 
 mod backup;
 mod computer;
+mod container;
 mod cover_color;
 mod downloads;
 mod editor;
@@ -775,6 +776,14 @@ fn link_soundcloud(state: &AppState, code: &str) -> Result<Settings, String> {
     Ok(s.clone())
 }
 
+/// How the last pairing from a link went, until the frontend has asked (it may have missed the event).
+static LINK_OUTCOME: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+
+#[tauri::command]
+fn take_link_outcome() -> Option<serde_json::Value> {
+    LINK_OUTCOME.lock().unwrap().take()
+}
+
 /// Phones: scanning the computer's QR code opens the app with a `yuuricloud://soundcloud/...` link.
 #[cfg(mobile)]
 fn open_links(app: &tauri::App) {
@@ -782,11 +791,23 @@ fn open_links(app: &tauri::App) {
     fn apply(app: &AppHandle, urls: Vec<tauri::Url>) {
         for url in urls.iter().filter(|u| u.scheme() == "yuuricloud") {
             // the computer's pairing QR code
+            // It asks the computer over the network, so not here: this runs on the main thread,
+            // often while the app is still starting, and iOS ends an app whose main thread is
+            // held up (and the local network permission question can't show meanwhile).
             if url.host_str() == Some("pair") {
-                match pair_computer(&app.state::<AppState>(), url.as_str()) {
-                    Ok(settings) => drop(app.emit("computer-linked", settings)),
-                    Err(e) => drop(app.emit("sc-link-failed", e)),
-                }
+                let (app, code) = (app.clone(), url.to_string());
+                std::thread::spawn(move || {
+                    let outcome = pair_computer(&app.state::<AppState>(), &code);
+                    // the frontend may not be listening yet, if the link started the app
+                    *LINK_OUTCOME.lock().unwrap() = Some(match &outcome {
+                        Ok(s) => serde_json::json!({ "ok": true, "name": s.computer.name }),
+                        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+                    });
+                    match outcome {
+                        Ok(settings) => drop(app.emit("computer-linked", settings)),
+                        Err(e) => drop(app.emit("computer-link-failed", e)),
+                    }
+                });
                 continue;
             }
             // SoundCloud's approval coming back for the sign-in `phone_sign_in` is waiting on
@@ -1355,6 +1376,38 @@ fn share_info(s: &share::Share) -> ShareInfo {
     ShareInfo { address: s.address.clone(), qr: soundcloud::qr_svg(&link).unwrap_or_default(), link }
 }
 
+/// Windows: let phones reach yuuricloud through Windows Firewall, for private and public
+/// networks (Windows only asks about one, and a home Wi-Fi is often set as public). Asks for
+/// administrator permission.
+#[tauri::command]
+async fn allow_firewall() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+        // one elevated cmd runs both netsh commands (one permission question); netsh reads the
+        // quotes itself, so a path with spaces is fine
+        let netsh = format!(
+            "/c netsh advfirewall firewall delete rule name=\"yuuricloud\" >nul & netsh advfirewall firewall add rule name=\"yuuricloud\" dir=in action=allow program=\"{exe}\" enable=yes profile=any"
+        );
+        let script = format!("Start-Process cmd -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '{}'", netsh.replace('\'', "''"));
+        let status = blocking(move || {
+            let mut cmd = std::process::Command::new("powershell");
+            cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // no console window
+            }
+            cmd.status().map_err(|e| e.to_string())
+        })
+        .await?;
+        if status.success() { Ok(()) } else { Err("Windows didn't allow it (the permission question was turned down?)".into()) }
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Only Windows needs this".into())
+    }
+}
+
 /// Computer: what's playing, for the phone's remote (the frontend reports it every second or so
 /// while sharing is on).
 #[tauri::command]
@@ -1383,12 +1436,8 @@ async fn computer_link(app: AppHandle, code: String) -> Result<Settings, String>
 }
 
 fn pair_computer(state: &AppState, code: &str) -> Result<Settings, String> {
-    let mut link = computer::from_link(code)?;
-    // check it answers, and take the name it gives
-    let hello = computer::get_json(&link, "/hello")?;
-    if let Some(name) = hello["name"].as_str() {
-        link.name = name.to_string();
-    }
+    // check it answers (on one of its addresses), and take the name it gives
+    let link = computer::reach(&computer::from_link(code)?)?;
     let mut s = state.settings.lock().unwrap();
     s.computer = link;
     state.save_settings(&s);
@@ -2146,11 +2195,52 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// Point every saved path at the app's folder as it is now (see container.rs), and save what
+/// changed.
+fn move_to_app_folder(home: &str, data_dir: &Path, settings: &mut Settings, tracks: &mut Vec<Track>, stats: &mut HashMap<String, PlayStat>) {
+    let fix = |p: &mut String| match container::rebase(p, home) {
+        Some(new) => {
+            *p = new;
+            true
+        }
+        None => false,
+    };
+    let mut changed = false;
+    for p in settings.favorites.iter_mut().chain(settings.folders.iter_mut()).chain(settings.playlists.iter_mut().flat_map(|l| l.songs.iter_mut())) {
+        changed |= fix(p);
+    }
+    if changed {
+        library::save_json(&data_dir.join("settings.json"), &*settings);
+    }
+    let mut tracks_changed = false;
+    for t in tracks.iter_mut() {
+        for p in [&mut t.path, &mut t.root, &mut t.cover, &mut t.thumb] {
+            tracks_changed |= fix(p);
+        }
+    }
+    if tracks_changed {
+        library::save_json(&data_dir.join("library.json"), &*tracks);
+    }
+    let moved: Vec<(String, String)> = stats.keys().filter_map(|k| container::rebase(k, home).map(|n| (k.clone(), n))).collect();
+    if !moved.is_empty() {
+        for (old, new) in moved {
+            if let Some(st) = stats.remove(&old) {
+                stats.insert(new, st);
+            }
+        }
+        library::save_json(&data_dir.join("stats.json"), &*stats);
+    }
+    history::rebase(data_dir, |p| container::rebase(p, home));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init());
     #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_deep_link::init());
+    let builder = builder
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_media_controls::init())
+        .plugin(tauri_plugin_barcode_scanner::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
@@ -2171,7 +2261,13 @@ pub fn run() {
             let _ = std::fs::create_dir_all(data_dir.join("soundcloud-cache"));
             allow_dir(handle, &data_dir.join("soundcloud-cache"));
 
-            let stats: HashMap<String, PlayStat> = library::load_json(&data_dir.join("stats.json")).unwrap_or_default();
+            let mut stats: HashMap<String, PlayStat> = library::load_json(&data_dir.join("stats.json")).unwrap_or_default();
+            // iOS may have moved the app to a new folder since the last start (an update or a
+            // reinstall does that): follow the songs there, or favourites and the rest are lost
+            let (mut settings, mut tracks) = (settings, tracks);
+            if let Some(home) = app.path().document_dir().ok().and_then(|d| container::current_home(&d)) {
+                move_to_app_folder(&home, &data_dir, &mut settings, &mut tracks, &mut stats);
+            }
             app.manage(AppState {
                 stats: Mutex::new(stats),
                 remote: Mutex::new(serde_json::Value::Null),
@@ -2241,6 +2337,8 @@ pub fn run() {
             song_quality,
             remove_duplicates,
             computer_sync_favorites,
+            take_link_outcome,
+            allow_firewall,
             save_many_tags,
             can_self_update,
             install_update,

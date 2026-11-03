@@ -17,6 +17,8 @@ pub struct ComputerLink {
     pub address: String,
     pub token: String,
     pub name: String,
+    /// the computer's other addresses (no port), tried when `address` doesn't answer
+    pub others: Vec<String>,
 }
 
 impl ComputerLink {
@@ -63,12 +65,13 @@ pub fn from_link(text: &str) -> Result<ComputerLink, String> {
     let bad = || "That isn't a yuuricloud pairing code — copy it from the computer again".to_string();
     let query = text.trim().split_once("pair?").map(|(_, q)| q).ok_or_else(bad)?;
     let param = |name: &str| query.split('&').find_map(|kv| kv.strip_prefix(name)?.strip_prefix('=').map(url_decode));
-    let link = ComputerLink { address: param("h").ok_or_else(bad)?, token: param("t").ok_or_else(bad)?, name: param("n").unwrap_or_else(|| "Computer".into()) };
+    let mut link = ComputerLink { address: param("h").ok_or_else(bad)?, token: param("t").ok_or_else(bad)?, name: param("n").unwrap_or_else(|| "Computer".into()), others: Vec::new() };
     // only an address on this network, with a port
     let host = link.address.rsplit_once(':').map(|(h, _)| h).ok_or_else(bad)?;
     if host.parse::<std::net::IpAddr>().is_err() {
         return Err(bad());
     }
+    link.others = param("a").unwrap_or_default().split(',').filter(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok()).map(String::from).collect();
     Ok(link)
 }
 
@@ -86,12 +89,47 @@ fn call(link: &ComputerLink, method: &str, path: &str, secs: u64) -> Result<ureq
         "POST" => agent(secs).post(&url).header("Authorization", &auth).send_empty(),
         _ => agent(secs).get(&url).header("Authorization", &auth).call(),
     }
-    .map_err(|_| format!("Can't reach {}. Is yuuricloud open there, with \"Let your phone connect\" on, and are you on the same Wi-Fi?", link.name))?;
+    .map_err(|_| unreachable(link))?;
     match res.status().as_u16() {
         401 => Err(format!("{} doesn't know this phone anymore: pair again", link.name)),
         s if s >= 400 => Err(format!("{} said {s}", link.name)),
         _ => Ok(res),
     }
+}
+
+/// What to check when the computer doesn't answer.
+fn unreachable(link: &ComputerLink) -> String {
+    format!(
+        "Can't reach {} at {}. Check that yuuricloud is open there with \"Let your phone connect\" on and both are on the same Wi-Fi. \
+         On the computer, allow yuuricloud through the firewall (Settings → Integrations → Phone & computer → Allow through firewall). \
+         On an iPhone, turn on Settings → Privacy & Security → Local Network → yuuricloud.",
+        link.name, link.address
+    )
+}
+
+/// Find the address the computer answers on: the one in the link, or one of its others. Returns
+/// the link with that address, and the computer's name as it gives it.
+pub fn reach(link: &ComputerLink) -> Result<ComputerLink, String> {
+    let port = link.address.rsplit_once(':').map(|(_, p)| p.to_string()).unwrap_or_default();
+    let mut tries = vec![link.address.clone()];
+    tries.extend(link.others.iter().map(|ip| format!("{ip}:{port}")));
+    let mut last = None;
+    for address in tries {
+        let attempt = ComputerLink { address, ..link.clone() };
+        match call(&attempt, "GET", "/hello", 5).and_then(|mut r| r.body_mut().read_json::<Value>().map_err(|e| e.to_string())) {
+            Ok(hello) => {
+                let mut found = attempt;
+                if let Some(name) = hello["name"].as_str() {
+                    found.name = name.to_string();
+                }
+                return Ok(found);
+            }
+            // the computer answered but turned us down: no use trying its other addresses
+            Err(e) if !e.starts_with("Can't reach") => return Err(e),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| unreachable(link)))
 }
 
 pub fn get_json(link: &ComputerLink, path: &str) -> Result<Value, String> {
@@ -204,7 +242,9 @@ mod tests {
     #[test]
     fn reads_pairing_links() {
         let l = from_link("yuuricloud://pair?h=192.168.1.5:8975&t=abc123&n=Noah%27s%20PC").unwrap();
-        assert_eq!(l, ComputerLink { address: "192.168.1.5:8975".into(), token: "abc123".into(), name: "Noah's PC".into() });
+        assert_eq!(l, ComputerLink { address: "192.168.1.5:8975".into(), token: "abc123".into(), name: "Noah's PC".into(), others: vec![] });
+        let l = from_link("yuuricloud://pair?h=172.20.0.1:8975&t=x&n=PC&a=192.168.1.5,nope,10.0.0.2").unwrap();
+        assert_eq!(l.others, vec!["192.168.1.5", "10.0.0.2"]);
         assert!(from_link("yuuricloud://pair?h=evil.example.com:80&t=x").is_err(), "only addresses on this network");
         assert!(from_link("hello").is_err());
     }

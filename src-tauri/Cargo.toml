@@ -1,6 +1,6 @@
 [package]
 name = "yuuricloud"
-version = "0.7.0"
+version = "0.8.0"
 description = "A small local music player"
 edition = "2021"
 
@@ -33,12 +33,18 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 base64 = "0.22"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# The iPhone's lock screen controls (plugins/media-controls); does nothing elsewhere.
+tauri-plugin-media-controls = { path = "plugins/media-controls" }
+# Scanning the computer's QR codes with the phone's camera (an empty crate on computers).
+tauri-plugin-barcode-scanner = "2"
 # The Soulseek client the iOS app has built in, since iOS can't run slskd.
 soulseek-rs-lib = "19.1"
 
 # The computer's side of "Let your phone connect" (share.rs).
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 tiny_http = "0.12"
+# All of this computer's network addresses, for the phone to try (share.rs).
+if-addrs = "0.13"
 # Duplicates go to the recycle bin / trash rather than being deleted outright.
 trash = "5"
 # The "Install" update button: download, check the signature of and install a new version.
