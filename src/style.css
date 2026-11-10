@@ -207,6 +207,9 @@ tbody tr.sel { background: var(--selected); }
 tbody tr.playing td:nth-child(2) { color: var(--accent); font-weight: 600; }
 table.no-album .col-album { display: none; }
 .empty-note { color: var(--muted); padding: 20px 14px; }
+.empty-note.sc-retry { display: grid; gap: 14px; justify-items: start; }
+.empty-note.sc-retry p { margin: 0; }
+.empty-note.sc-retry .btn { margin-top: 2px; }
 
 .empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;

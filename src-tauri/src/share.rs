@@ -22,11 +22,17 @@ pub const DEFAULT_PORT: u16 = 8975;
 pub trait Source: Send + Sync + 'static {
     fn tracks(&self) -> Vec<Track>;
     fn settings(&self) -> Settings;
+    /// song id -> star rating (1–5); 0 and missing mean unrated
+    fn ratings(&self) -> std::collections::HashMap<String, u8>;
     /// what's playing, for the remote
     fn now(&self) -> Value;
     fn command(&self, command: &str, value: Option<f64>);
     /// make a song a favourite (the phone has it as one)
     fn favorite(&self, path: &str);
+    /// set a song's star rating (1–5), or clear it with 0
+    fn rate(&self, path: &str, rating: u8);
+    /// put a song on a playlist (create the playlist if needed); no duplicates
+    fn add_playlist_song(&self, name: &str, path: &str);
 }
 
 struct App(AppHandle);
@@ -37,6 +43,15 @@ impl Source for App {
     }
     fn settings(&self) -> Settings {
         self.0.state::<AppState>().settings.lock().unwrap().clone()
+    }
+    fn ratings(&self) -> std::collections::HashMap<String, u8> {
+        let state = self.0.state::<AppState>();
+        let stats = state.stats.lock().unwrap();
+        stats
+            .iter()
+            .filter(|(_, st)| st.rating > 0)
+            .map(|(path, st)| (song_id(path), st.rating))
+            .collect()
     }
     fn now(&self) -> Value {
         self.0.state::<AppState>().remote.lock().unwrap().clone()
@@ -52,6 +67,38 @@ impl Source for App {
             state.save_settings(&s);
             let _ = self.0.emit("favorites-changed", s.favorites.clone());
         }
+    }
+    fn rate(&self, path: &str, rating: u8) {
+        let state = self.0.state::<AppState>();
+        let mut stats = state.stats.lock().unwrap();
+        let entry = stats.entry(path.to_string()).or_default();
+        let rating = rating.min(5);
+        if entry.rating == rating {
+            return;
+        }
+        entry.rating = rating;
+        crate::library::save_json(&state.data_dir.join("stats.json"), &*stats);
+    }
+    fn add_playlist_song(&self, name: &str, path: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let state = self.0.state::<AppState>();
+        let mut s = state.settings.lock().unwrap();
+        if let Some(p) = s.playlists.iter_mut().find(|p| p.name == name) {
+            if p.songs.iter().any(|x| x == path) {
+                return;
+            }
+            p.songs.push(path.to_string());
+        } else {
+            s.playlists.push(crate::library::Playlist {
+                id: crate::library::hash_hex(&format!("sync:{name}")),
+                name: name.to_string(),
+                songs: vec![path.to_string()],
+            });
+        }
+        state.save_settings(&s);
     }
 }
 
@@ -193,7 +240,7 @@ fn content_type(file: &str) -> &'static str {
     }
 }
 
-fn answer(source: &dyn Source, token: &str, request: tiny_http::Request) {
+fn answer(source: &dyn Source, token: &str, mut request: tiny_http::Request) {
     if !authorized(&request, token) {
         return reply_json(request, 401, &json!({ "error": "Not paired with this computer" }));
     }
@@ -224,7 +271,7 @@ fn answer(source: &dyn Source, token: &str, request: tiny_http::Request) {
             let s = source.settings();
             let favorites: Vec<String> = s.favorites.iter().map(|p| song_id(p)).collect();
             let playlists: Vec<Value> = s.playlists.iter().map(|p| json!({ "name": p.name, "songs": p.songs.iter().map(|x| song_id(x)).collect::<Vec<_>>() })).collect();
-            reply_json(request, 200, &json!({ "songs": songs, "favorites": favorites, "playlists": playlists }));
+            reply_json(request, 200, &json!({ "songs": songs, "favorites": favorites, "playlists": playlists, "ratings": source.ratings() }));
         }
         (tiny_http::Method::Get, p) if p.starts_with("/song/") || p.starts_with("/cover/") => {
             let cover = p.starts_with("/cover/");
@@ -257,6 +304,45 @@ fn answer(source: &dyn Source, token: &str, request: tiny_http::Request) {
                 None => reply_json(request, 404, &json!({ "error": "No such song" })),
             }
         }
+        // phone → computer half of two-way library sync: favourites, ratings and playlist songs
+        (tiny_http::Method::Post, "/library-sync") => {
+            let mut body = String::new();
+            if let Err(e) = request.as_reader().read_to_string(&mut body) {
+                return reply_json(request, 400, &json!({ "error": e.to_string() }));
+            }
+            let Ok(patch) = serde_json::from_str::<Value>(&body) else {
+                return reply_json(request, 400, &json!({ "error": "Bad JSON" }));
+            };
+            let by_id: std::collections::HashMap<String, String> =
+                source.tracks().into_iter().map(|t| (song_id(&t.path), t.path)).collect();
+            let mut favorites = 0usize;
+            let mut ratings = 0usize;
+            let mut playlist_songs = 0usize;
+            for id in patch["favorites"].as_array().into_iter().flatten().filter_map(|v| v.as_str()) {
+                if let Some(path) = by_id.get(id) {
+                    source.favorite(path);
+                    favorites += 1;
+                }
+            }
+            if let Some(map) = patch["ratings"].as_object() {
+                for (id, stars) in map {
+                    let Some(path) = by_id.get(id) else { continue };
+                    let rating = stars.as_u64().unwrap_or(0).min(5) as u8;
+                    source.rate(path, rating);
+                    ratings += 1;
+                }
+            }
+            for pl in patch["playlists"].as_array().into_iter().flatten() {
+                let Some(name) = pl["name"].as_str() else { continue };
+                for id in pl["songs"].as_array().into_iter().flatten().filter_map(|v| v.as_str()) {
+                    if let Some(path) = by_id.get(id) {
+                        source.add_playlist_song(name, path);
+                        playlist_songs += 1;
+                    }
+                }
+            }
+            reply_json(request, 200, &json!({ "ok": true, "favorites": favorites, "ratings": ratings, "playlistSongs": playlist_songs }));
+        }
         (tiny_http::Method::Post, p) if p.starts_with("/remote/") => {
             let value = param("value").and_then(|v| v.parse::<f64>().ok());
             source.command(p.trim_start_matches("/remote/"), value);
@@ -274,9 +360,10 @@ mod tests {
 
     struct Fake {
         tracks: Vec<Track>,
-        settings: Settings,
+        settings: Mutex<Settings>,
         commands: Mutex<Vec<(String, Option<f64>)>>,
         favorited: Mutex<Vec<String>>,
+        ratings: Mutex<std::collections::HashMap<String, u8>>,
     }
 
     impl Source for Fake {
@@ -284,7 +371,15 @@ mod tests {
             self.tracks.clone()
         }
         fn settings(&self) -> Settings {
-            self.settings.clone()
+            self.settings.lock().unwrap().clone()
+        }
+        fn ratings(&self) -> std::collections::HashMap<String, u8> {
+            self.ratings
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(path, n)| (song_id(path), *n))
+                .collect()
         }
         fn now(&self) -> Value {
             json!({ "title": "Song A", "playing": true })
@@ -294,6 +389,27 @@ mod tests {
         }
         fn favorite(&self, path: &str) {
             self.favorited.lock().unwrap().push(path.into());
+            let mut s = self.settings.lock().unwrap();
+            if !s.favorites.iter().any(|f| f == path) {
+                s.favorites.push(path.into());
+            }
+        }
+        fn rate(&self, path: &str, rating: u8) {
+            self.ratings.lock().unwrap().insert(path.into(), rating.min(5));
+        }
+        fn add_playlist_song(&self, name: &str, path: &str) {
+            let mut s = self.settings.lock().unwrap();
+            if let Some(p) = s.playlists.iter_mut().find(|p| p.name == name) {
+                if !p.songs.iter().any(|x| x == path) {
+                    p.songs.push(path.into());
+                }
+            } else {
+                s.playlists.push(crate::library::Playlist {
+                    id: format!("pl-{name}"),
+                    name: name.into(),
+                    songs: vec![path.into()],
+                });
+            }
         }
     }
 
@@ -317,7 +433,14 @@ mod tests {
         };
         let mut settings = Settings::default();
         settings.favorites = vec![track.path.clone()];
-        let fake = Arc::new(Fake { tracks: vec![track], settings, commands: Mutex::new(Vec::new()), favorited: Mutex::new(Vec::new()) });
+        let path = track.path.clone();
+        let fake = Arc::new(Fake {
+            tracks: vec![track],
+            settings: Mutex::new(settings),
+            commands: Mutex::new(Vec::new()),
+            favorited: Mutex::new(Vec::new()),
+            ratings: Mutex::new(std::collections::HashMap::from([(path.clone(), 4)])),
+        });
         let (share, port) = serve(fake.clone(), ("127.0.0.1", 0), "127.0.0.1").unwrap();
 
         let link = computer::from_link(&format!("yuuricloud://pair?h=127.0.0.1:{port}&t={}&n=PC", share.token)).unwrap();
@@ -325,6 +448,7 @@ mod tests {
         let s = &library["songs"][0];
         assert_eq!((s["title"].as_str(), s["size"].as_u64()), (Some("Song A"), Some(300_000)));
         assert_eq!(library["favorites"][0], s["id"]);
+        assert_eq!(library["ratings"][s["id"].as_str().unwrap()], 4);
 
         // copy it: the file, and the album's cover picture next to it
         let want: SongToCopy = serde_json::from_value(s.clone()).unwrap();
@@ -343,8 +467,23 @@ mod tests {
 
         // a favourite on the phone becomes one on the computer
         computer::favorite_there(&link, &want.id).unwrap();
-        assert_eq!(*fake.favorited.lock().unwrap(), vec![fake.tracks[0].path.clone()]);
+        assert_eq!(*fake.favorited.lock().unwrap(), vec![path.clone()]);
         assert!(computer::favorite_there(&link, "nosuchsong").is_err());
+
+        // two-way library sync: phone pushes a rating and a playlist song
+        computer::post_json(
+            &link,
+            "/library-sync",
+            &json!({
+                "favorites": [],
+                "ratings": { want.id.clone(): 5 },
+                "playlists": [{ "name": "Road trip", "songs": [want.id.clone()] }],
+            }),
+        )
+        .unwrap();
+        assert_eq!(fake.ratings.lock().unwrap().get(&path), Some(&5));
+        assert_eq!(fake.settings.lock().unwrap().playlists[0].name, "Road trip");
+        assert_eq!(fake.settings.lock().unwrap().playlists[0].songs, vec![path.clone()]);
 
         // the wrong token gets nowhere
         let stranger = ComputerLink { token: "nope".into(), ..link.clone() };
