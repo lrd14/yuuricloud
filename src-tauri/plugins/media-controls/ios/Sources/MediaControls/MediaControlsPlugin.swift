@@ -35,7 +35,8 @@ struct RateArgs: Decodable { let rate: Double }
 /// everything through "state" events: which song (index and path), where it's at, whether it's
 /// playing, and `ended` when the last song handed over has finished.
 class MediaControlsPlugin: Plugin {
-  private let player = AVPlayer()
+  /// Holds the current song and the next one, already loading, so one follows the other with no gap.
+  private let player = AVQueuePlayer()
   private var items: [QueueItem] = []
   private var index = 0
   private var repeatOne = false
@@ -44,6 +45,13 @@ class MediaControlsPlugin: Plugin {
   private var loadedPath: String?
   private var ready = false
   private var endObserver: NSObjectProtocol?
+  private var itemObserver: NSKeyValueObservation?
+  /// each song in the player: its file
+  private var itemPaths: [ObjectIdentifier: String] = [:]
+  /// the song being played (what the player's current item was last known to be)
+  private var currentLoaded: AVPlayerItem?
+  /// true while the queue is being rebuilt, so the player moving about isn't taken for a song ending
+  private var rebuilding = false
   private var tickObserver: Any?
   private var artworkPath: String?
   private var artwork: MPMediaItemArtwork?
@@ -63,11 +71,15 @@ class MediaControlsPlugin: Plugin {
       let play = args.play ?? self.wantPlaying
       if self.items[self.index].path != self.loadedPath {
         self.load(at: args.position ?? 0, play: play)
-      } else if play != self.wantPlaying {
-        play ? self.resume() : self.halt()
       } else {
-        self.showNowPlaying()
-        self.report()
+        // the same song: what follows it (shuffle, repeat, a song added) may have changed
+        self.enqueueNext()
+        if play != self.wantPlaying {
+          play ? self.resume() : self.halt()
+        } else {
+          self.showNowPlaying()
+          self.report()
+        }
       }
       invoke.resolve()
     }
@@ -118,7 +130,11 @@ class MediaControlsPlugin: Plugin {
     DispatchQueue.main.async {
       self.wantPlaying = false
       self.player.pause()
-      self.player.replaceCurrentItem(with: nil)
+      self.rebuilding = true
+      self.player.removeAllItems()
+      self.rebuilding = false
+      self.itemPaths.removeAll()
+      self.currentLoaded = nil
       self.loadedPath = nil
       self.report()
       invoke.resolve()
@@ -128,14 +144,15 @@ class MediaControlsPlugin: Plugin {
   // MARK: playing
 
   private func load(at position: Double, play: Bool) {
-    let item = items[index]
-    let playerItem = AVPlayerItem(url: URL(fileURLWithPath: item.path))
-    if let old = endObserver { NotificationCenter.default.removeObserver(old) }
-    endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main) { [weak self] _ in
-      self?.finished()
-    }
-    player.replaceCurrentItem(with: playerItem)
-    loadedPath = item.path
+    rebuilding = true
+    player.removeAllItems()
+    itemPaths.removeAll()
+    let current = makeItem(index)
+    player.insert(current, after: nil)
+    currentLoaded = current
+    loadedPath = items[index].path
+    enqueueNext()
+    rebuilding = false
     if position > 0 {
       player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
     }
@@ -143,6 +160,67 @@ class MediaControlsPlugin: Plugin {
     if play { player.playImmediately(atRate: rate) } else { player.pause() }
     showNowPlaying()
     report()
+  }
+
+  private func makeItem(_ i: Int) -> AVPlayerItem {
+    let item = AVPlayerItem(url: URL(fileURLWithPath: items[i].path))
+    itemPaths[ObjectIdentifier(item)] = items[i].path
+    return item
+  }
+
+  /// Keep the song after this one queued behind it, loading, so it starts the moment this one ends.
+  /// With nothing after it (the last song, or repeat one) the player stays on this one at its end,
+  /// and `itemEnded` takes it from there.
+  private func enqueueNext() {
+    let next = index + 1
+    let want = !repeatOne && items.indices.contains(next)
+    player.actionAtItemEnd = want ? .advance : .pause
+    let queued = player.items()
+    let behind = Array(queued.dropFirst())
+    if want, behind.count == 1, itemPaths[ObjectIdentifier(behind[0])] == items[next].path { return }
+    rebuilding = true
+    for extra in behind {
+      player.remove(extra)
+      itemPaths[ObjectIdentifier(extra)] = nil
+    }
+    if want, let current = player.currentItem {
+      player.insert(makeItem(next), after: current)
+    }
+    rebuilding = false
+  }
+
+  /// The player went on to the queued song by itself.
+  private func currentItemChanged() {
+    guard !rebuilding, let current = player.currentItem, current !== currentLoaded,
+          let path = itemPaths[ObjectIdentifier(current)] else { return }
+    currentLoaded = current
+    if items.indices.contains(index + 1), items[index + 1].path == path {
+      index += 1
+    } else if let found = items.firstIndex(where: { $0.path == path }) {
+      index = found
+    } else {
+      return
+    }
+    loadedPath = path
+    enqueueNext()
+    if wantPlaying { player.rate = rate }
+    showNowPlaying()
+    report()
+  }
+
+  /// A song played to its end. Moving on to the queued one is the player's own doing; this is for
+  /// repeat one and for the last song.
+  private func itemEnded(_ item: AVPlayerItem?) {
+    guard let item = item, item === currentLoaded else { return }
+    if repeatOne {
+      seek(to: 0)
+      player.playImmediately(atRate: rate)
+      return
+    }
+    if items.indices.contains(index + 1) { return }
+    wantPlaying = false
+    showNowPlaying()
+    report(ended: true)
   }
 
   private func resume() {
@@ -168,22 +246,6 @@ class MediaControlsPlugin: Plugin {
         self?.showNowPlaying()
         self?.report()
       }
-    }
-  }
-
-  private func finished() {
-    if repeatOne {
-      seek(to: 0)
-      player.playImmediately(atRate: rate)
-      return
-    }
-    if index + 1 < items.count {
-      index += 1
-      load(at: 0, play: true)
-    } else {
-      wantPlaying = false
-      showNowPlaying()
-      report(ended: true)
     }
   }
 
@@ -280,6 +342,14 @@ class MediaControlsPlugin: Plugin {
     try? session.setActive(true)
     UIApplication.shared.beginReceivingRemoteControlEvents()
     player.automaticallyWaitsToMinimizeStalling = false
+
+    // the player moving on to the queued song, and a song reaching its end
+    itemObserver = player.observe(\.currentItem, options: [.new]) { [weak self] _, _ in
+      DispatchQueue.main.async { self?.currentItemChanged() }
+    }
+    endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] note in
+      self?.itemEnded(note.object as? AVPlayerItem)
+    }
 
     // where it's at, for the frontend's seek bar and lyrics (the lock screen keeps time itself)
     tickObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] _ in
