@@ -15,7 +15,11 @@ concurrency:
 
 jobs:
   # Unsigned .ipa (same job as Actions → iOS), so a branch build includes the phone app too.
+  # The iOS workflow asks for contents: write (it also attaches to releases); grant that here or
+  # GitHub rejects the reusable call before anything runs.
   ios:
+    permissions:
+      contents: write
     uses: ./.github/workflows/ios.yml
     with:
       release: false
