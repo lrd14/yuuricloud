@@ -80,13 +80,28 @@ fn agent(secs: u64) -> ureq::Agent {
 }
 
 fn call(link: &ComputerLink, method: &str, path: &str, secs: u64) -> Result<ureq::http::Response<ureq::Body>, String> {
+    call_body(link, method, path, secs, None)
+}
+
+fn call_body(
+    link: &ComputerLink,
+    method: &str,
+    path: &str,
+    secs: u64,
+    body: Option<&Value>,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
     if !link.linked() {
         return Err("Pair with a computer first".into());
     }
     let url = format!("http://{}{path}", link.address);
     let auth = format!("Bearer {}", link.token);
-    let res = match method {
-        "POST" => agent(secs).post(&url).header("Authorization", &auth).send_empty(),
+    let res = match (method, body) {
+        ("POST", Some(v)) => agent(secs)
+            .post(&url)
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .send_json(v),
+        ("POST", None) => agent(secs).post(&url).header("Authorization", &auth).send_empty(),
         _ => agent(secs).get(&url).header("Authorization", &auth).call(),
     }
     .map_err(|_| unreachable(link))?;
@@ -134,6 +149,14 @@ pub fn reach(link: &ComputerLink) -> Result<ComputerLink, String> {
 
 pub fn get_json(link: &ComputerLink, path: &str) -> Result<Value, String> {
     call(link, "GET", path, 20)?.body_mut().read_json().map_err(|e| e.to_string())
+}
+
+/// POST JSON to the computer and return its JSON reply.
+pub fn post_json(link: &ComputerLink, path: &str, body: &Value) -> Result<Value, String> {
+    call_body(link, "POST", path, 20, Some(body))?
+        .body_mut()
+        .read_json()
+        .map_err(|e| e.to_string())
 }
 
 pub fn remote(link: &ComputerLink, command: &str, value: Option<f64>) -> Result<(), String> {

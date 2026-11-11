@@ -1560,18 +1560,29 @@ async fn computer_copy(app: AppHandle, songs: Vec<computer::SongToCopy>, favorit
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FavSync {
+struct LibrarySync {
     /// songs both have
     shared: usize,
     favorited_here: usize,
     favorited_there: usize,
+    rated_here: usize,
+    rated_there: usize,
+    /// playlist songs added on this phone
+    playlist_here: usize,
+    /// playlist songs pushed to the computer
+    playlist_there: usize,
     favorites: Vec<String>,
+    playlists: Vec<library::Playlist>,
+    /// path -> play stats after ratings were merged in
+    stats: HashMap<String, PlayStat>,
 }
 
-/// Phone: match up favourites with the computer, both ways, for every song both have (found by
-/// title, artist and length, wherever it is), without copying anything.
+/// Phone: two-way library sync with the computer for every song both have (matched by title,
+/// artist and length): favourites, star ratings and playlists. Nothing is copied, and nothing
+/// already set is taken away — missing favourites/ratings are filled in, and playlist songs are
+/// united by name.
 #[tauri::command]
-async fn computer_sync_favorites(app: AppHandle) -> Result<FavSync, String> {
+async fn computer_sync_library(app: AppHandle) -> Result<LibrarySync, String> {
     blocking(move || {
         let state = app.state::<AppState>();
         let link = computer_of(&state);
@@ -1579,31 +1590,158 @@ async fn computer_sync_favorites(app: AppHandle) -> Result<FavSync, String> {
         let songs: Vec<computer::SongToCopy> = serde_json::from_value(library["songs"].clone()).map_err(|e| e.to_string())?;
         let theirs: std::collections::HashSet<String> =
             library["favorites"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
+        let their_ratings: HashMap<String, u8> = library["ratings"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(id, v)| Some((id.clone(), v.as_u64()? as u8)))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        let their_playlists: Vec<(String, Vec<String>)> = library["playlists"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                let name = p["name"].as_str()?.to_string();
+                let songs = p["songs"].as_array()?.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                Some((name, songs))
+            })
+            .collect();
+
         let here = state.tracks.lock().unwrap().clone();
-        let ours: std::collections::HashSet<String> = state.settings.lock().unwrap().favorites.iter().cloned().collect();
-        let (mut shared, mut fav_here, mut fav_there) = (0, Vec::new(), Vec::new());
+        // computer song id ↔ phone path for songs both have
+        let mut shared_pairs: Vec<(String, String)> = Vec::new();
+        let mut id_to_path: HashMap<String, String> = HashMap::new();
+        let mut path_to_id: HashMap<String, String> = HashMap::new();
         for song in &songs {
             let Some(t) = computer::already_here(song, &here) else { continue };
-            shared += 1;
-            match (theirs.contains(&song.id), ours.contains(&t.path)) {
-                (true, false) if !fav_here.contains(&t.path) => fav_here.push(t.path.clone()),
-                (false, true) => fav_there.push(song.id.clone()),
+            shared_pairs.push((song.id.clone(), t.path.clone()));
+            id_to_path.insert(song.id.clone(), t.path.clone());
+            path_to_id.insert(t.path.clone(), song.id.clone());
+        }
+        let shared = shared_pairs.len();
+
+        let ours: std::collections::HashSet<String> = state.settings.lock().unwrap().favorites.iter().cloned().collect();
+        let (mut fav_here, mut fav_there) = (Vec::new(), Vec::new());
+        for (id, path) in &shared_pairs {
+            match (theirs.contains(id), ours.contains(path)) {
+                (true, false) if !fav_here.contains(path) => fav_here.push(path.clone()),
+                (false, true) => fav_there.push(id.clone()),
                 _ => {}
             }
         }
-        let favorited_here = fav_here.len();
-        let favorites = {
+
+        // ratings: fill in a missing rating from the other side; if both differ, keep the higher
+        let mut rate_here: Vec<(String, u8)> = Vec::new();
+        let mut rate_there: HashMap<String, u8> = HashMap::new();
+        {
+            let stats = state.stats.lock().unwrap();
+            for (id, path) in &shared_pairs {
+                let ours_n = stats.get(path).map(|s| s.rating).unwrap_or(0);
+                let theirs_n = their_ratings.get(id).copied().unwrap_or(0);
+                if theirs_n > ours_n {
+                    rate_here.push((path.clone(), theirs_n));
+                } else if ours_n > theirs_n {
+                    rate_there.insert(id.clone(), ours_n);
+                }
+            }
+        }
+        let rated_here = rate_here.len();
+        if !rate_here.is_empty() {
+            let mut stats = state.stats.lock().unwrap();
+            for (path, n) in rate_here {
+                stats.entry(path).or_default().rating = n;
+            }
+            library::save_json(&state.data_dir.join("stats.json"), &*stats);
+        }
+
+        // playlists: unite songs both have, by playlist name
+        let mut playlist_here = 0usize;
+        let mut push_playlists: Vec<(String, Vec<String>)> = Vec::new();
+        {
             let mut s = state.settings.lock().unwrap();
-            s.favorites.extend(fav_here);
-            if favorited_here > 0 {
+            // computer → phone
+            for (name, ids) in &their_playlists {
+                let paths: Vec<String> = ids.iter().filter_map(|id| id_to_path.get(id).cloned()).collect();
+                if paths.is_empty() {
+                    continue;
+                }
+                if let Some(p) = s.playlists.iter_mut().find(|p| p.name == *name) {
+                    for path in paths {
+                        if !p.songs.iter().any(|x| *x == path) {
+                            p.songs.push(path);
+                            playlist_here += 1;
+                        }
+                    }
+                } else {
+                    playlist_here += paths.len();
+                    s.playlists.push(library::Playlist {
+                        id: library::hash_hex(&format!("sync:{name}")),
+                        name: name.clone(),
+                        songs: paths,
+                    });
+                }
+            }
+            // phone → computer: songs on our playlists that the computer is missing (or whole playlist if new)
+            for p in &s.playlists {
+                let their = their_playlists.iter().find(|(n, _)| n == &p.name);
+                let songs: Vec<String> = p
+                    .songs
+                    .iter()
+                    .filter_map(|path| path_to_id.get(path).cloned())
+                    .filter(|id| match their {
+                        Some((_, ids)) => !ids.contains(id),
+                        None => true,
+                    })
+                    .collect();
+                if !songs.is_empty() {
+                    push_playlists.push((p.name.clone(), songs));
+                }
+            }
+            s.favorites.extend(fav_here.iter().cloned());
+            if playlist_here > 0 || !fav_here.is_empty() {
                 state.save_settings(&s);
             }
-            s.favorites.clone()
+        }
+
+        let patch = serde_json::json!({
+            "favorites": fav_there,
+            "ratings": rate_there,
+            "playlists": push_playlists.iter().map(|(name, songs)| serde_json::json!({ "name": name, "songs": songs })).collect::<Vec<_>>(),
+        });
+        let pushed = computer::post_json(&link, "/library-sync", &patch)?;
+        let favorited_there = pushed["favorites"].as_u64().unwrap_or(fav_there.len() as u64) as usize;
+        // count playlist songs we asked to push (the computer reports how many it applied)
+        let playlist_there = pushed["playlistSongs"].as_u64().unwrap_or_else(|| {
+            push_playlists.iter().map(|(_, s)| s.len() as u64).sum()
+        }) as usize;
+        let rated_there = pushed["ratings"].as_u64().unwrap_or(rate_there.len() as u64) as usize;
+
+        let (favorites, playlists) = {
+            let s = state.settings.lock().unwrap();
+            (s.favorites.clone(), s.playlists.clone())
         };
-        let favorited_there = fav_there.iter().filter(|id| computer::favorite_there(&link, id).is_ok()).count();
-        Ok(FavSync { shared, favorited_here, favorited_there, favorites })
+        let stats = state.stats.lock().unwrap().clone();
+        Ok(LibrarySync {
+            shared,
+            favorited_here: fav_here.len(),
+            favorited_there,
+            rated_here,
+            rated_there,
+            playlist_here,
+            playlist_there,
+            favorites,
+            playlists,
+            stats,
+        })
     })
     .await
+}
+
+/// Kept for older phones; same as computer_sync_library.
+#[tauri::command]
+async fn computer_sync_favorites(app: AppHandle) -> Result<LibrarySync, String> {
+    computer_sync_library(app).await
 }
 
 #[tauri::command]
@@ -2337,6 +2475,7 @@ pub fn run() {
             song_quality,
             remove_duplicates,
             computer_sync_favorites,
+            computer_sync_library,
             take_link_outcome,
             allow_firewall,
             save_many_tags,

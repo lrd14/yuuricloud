@@ -52,6 +52,8 @@ const state = {
     searchQuery: "",   // last SoundCloud-wide search
     filter: "",        // search box text, filtering the shown list
     loaded: false, loadingKey: null, error: "",
+    /** true while scLoad is in flight, so a second Refresh doesn't stack */
+    refreshing: false,
   },
 };
 
@@ -2467,11 +2469,16 @@ function renderScSongs() {
   const tracks = (list || []).filter((t) => !q || [t.title, t.artist].some((s) => s.toLowerCase().includes(q)));
   el.songTable.classList.remove("one-artist");
   fillSongs(tracks, { hideAlbum: true, title: scListName(sc.current) });
-  const note = !list ? (sc.loadingKey === sc.current ? "Loading from SoundCloud…" : sc.error || "Nothing here.")
+  const failed = !list && sc.error && sc.loadingKey !== sc.current;
+  const note = !list ? (sc.loadingKey === sc.current || sc.refreshing ? "Loading from SoundCloud…" : sc.error || "Nothing here.")
     : !tracks.length ? (q ? "No matches." : "No songs here.") : "";
   if (note) {
-    el.songBody.innerHTML = `<tr><td colspan="5" class="empty-note">${esc(note)}</td></tr>`;
-    if (gridShown()) el.songGrid.innerHTML = `<div class="empty-note">${esc(note)}</div>`;
+    // a failed load gets a Retry button: wifi coming back shouldn't need a restart
+    const html = failed
+      ? `<div class="empty-note sc-retry"><p>${esc(sc.error)}</p><button type="button" class="btn accent" data-sc-retry>Try again</button></div>`
+      : `<div class="empty-note">${esc(note)}</div>`;
+    el.songBody.innerHTML = `<tr><td colspan="5">${html}</td></tr>`;
+    if (gridShown()) el.songGrid.innerHTML = html;
   }
 }
 
@@ -2508,21 +2515,33 @@ async function scFetch(key) {
   if (state.source === "sc") renderSc();
 }
 
-/** (Re)load the playlists and the list being shown. */
+/** (Re)load the playlists and the list being shown. Safe to call after a failed load (wifi back). */
 async function scLoad() {
   const sc = state.sc;
-  sc.loaded = true;
+  if (sc.refreshing) return;
+  sc.refreshing = true;
+  sc.error = "";
+  $("sc-refresh").disabled = true;
   for (const key of [...sc.tracks.keys()]) if (key !== "search") sc.tracks.delete(key);
   setStatus("Loading SoundCloud…");
+  if (state.source === "sc") renderScSongs();
   try {
     sc.playlists = await invoke("sc_playlists");
+    sc.loaded = true;
     setStatus("", 0);
+    if (state.source === "sc") renderSc();
+    if (!sc.tracks.has(sc.current)) await scFetch(sc.current);
+    if (!sc.tracks.has("likes")) scFetch("likes"); // to know which songs are liked
   } catch (e) {
+    sc.loaded = false; // switching back to SoundCloud will try again
+    sc.error = String(e);
     setStatus(String(e), 6000);
+    if (state.source === "sc") renderSc();
+  } finally {
+    sc.refreshing = false;
+    $("sc-refresh").disabled = false;
+    if (state.source === "sc") renderScSongs();
   }
-  if (state.source === "sc") renderSc();
-  if (!sc.tracks.has(sc.current)) await scFetch(sc.current);
-  if (!sc.tracks.has("likes")) scFetch("likes"); // to know which songs are liked
 }
 
 function scSearch(query) {
@@ -2537,12 +2556,19 @@ function scSearch(query) {
 }
 
 function scReset() {
-  Object.assign(state.sc, { liked: new Set(), playlists: [], current: "likes", searchQuery: "", filter: "", loaded: false, loadingKey: null, error: "" });
+  Object.assign(state.sc, { liked: new Set(), playlists: [], current: "likes", searchQuery: "", filter: "", loaded: false, loadingKey: null, error: "", refreshing: false });
   state.sc.tracks.clear();
 }
 
 $("sc-refresh").addEventListener("click", () => scLoad());
 $("sc-open-settings").addEventListener("click", () => showIntegration("sc"));
+// Retry from the empty list after a failed load (e.g. no wifi)
+el.songBody.addEventListener("click", (e) => { if (e.target.closest("[data-sc-retry]")) scLoad(); });
+el.songGrid.addEventListener("click", (e) => { if (e.target.closest("[data-sc-retry]")) scLoad(); });
+// wifi came back: if SoundCloud is open and the last load failed, try again without a restart
+window.addEventListener("online", () => {
+  if (state.source === "sc" && scConnected() && (!state.sc.loaded || state.sc.error) && !state.sc.refreshing) scLoad();
+});
 
 /** Show the playing SoundCloud song in its list. */
 function jumpToScTrack(t) {
@@ -3793,15 +3819,26 @@ $("pc-favs").addEventListener("click", async () => {
   status.className = "hint";
   status.textContent = `Comparing with ${name}…`;
   try {
-    const r = await invoke("computer_sync_favorites");
+    const r = await invoke("computer_sync_library");
     state.favorites = new Set(r.favorites);
     state.settings.favorites = r.favorites;
+    state.playlists = r.playlists || state.playlists;
+    state.settings.playlists = state.playlists;
+    if (r.stats) state.stats = r.stats;
     applySearch();
     renderNowFav();
     status.className = "hint ok";
+    const bits = [
+      r.favoritedHere && `${countOf(r.favoritedHere, "favourite")} from ${name} marked here`,
+      r.favoritedThere && `${countOf(r.favoritedThere, "favourite")} from this phone marked on ${name}`,
+      r.ratedHere && `${countOf(r.ratedHere, "rating")} from ${name} set here`,
+      r.ratedThere && `${countOf(r.ratedThere, "rating")} from this phone set on ${name}`,
+      r.playlistHere && `${countOf(r.playlistHere, "playlist song")} from ${name} added here`,
+      r.playlistThere && `${countOf(r.playlistThere, "playlist song")} from this phone added on ${name}`,
+    ].filter(Boolean);
     status.textContent = !r.shared ? `This phone and ${name} have no songs in common yet.`
-      : !r.favoritedHere && !r.favoritedThere ? `Already in sync: ${countOf(r.shared, "song")} on both.`
-      : [r.favoritedHere && `${countOf(r.favoritedHere, "favourite")} from ${name} marked here`, r.favoritedThere && `${countOf(r.favoritedThere, "favourite")} from this phone marked on ${name}`].filter(Boolean).join(" · ") + ".";
+      : !bits.length ? `Already in sync: ${countOf(r.shared, "song")} on both.`
+      : bits.join(" · ") + ".";
   } catch (e) {
     status.className = "hint err";
     status.textContent = String(e);

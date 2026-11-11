@@ -1,5 +1,6 @@
-# Builds the computer versions of a branch for testing, without making a release: the files are
-# on the run's page under "Artifacts". Runs on every push to a branch other than main, or by hand.
+# Builds the computer and iPhone versions of a branch for testing, without making a release: the
+# files are on the run's page under "Artifacts". Runs on every push to a branch other than main,
+# or by hand.
 name: Test build
 
 on:
@@ -13,6 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Unsigned .ipa (same job as Actions → iOS), so a branch build includes the phone app too.
+  # The iOS workflow asks for contents: write (it also attaches to releases); grant that here or
+  # GitHub rejects the reusable call before anything runs.
+  ios:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/ios.yml
+    with:
+      release: false
+
   build:
     strategy:
       fail-fast: false
